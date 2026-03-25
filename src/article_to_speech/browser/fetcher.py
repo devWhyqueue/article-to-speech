@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+from playwright.async_api import Browser, BrowserContext, Page, TimeoutError, async_playwright
+
+from article_to_speech.browser.launch import browser_args, browser_stealth_script
+from article_to_speech.core.config import Settings
+
+ARCHIVE_BASE_URL = "https://archive.is/"
+
+
+@dataclass(slots=True, frozen=True)
+class RenderedPage:
+    html: str
+    final_url: str
+
+
+class BrowserPageFetcher:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    async def render_html(self, url: str) -> RenderedPage:
+        """Render a page in Chromium and return the final DOM HTML."""
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=self._settings.chatgpt_browser_headless,
+                args=browser_args(),
+            )
+            try:
+                context = await self._new_context(browser)
+                try:
+                    page = await context.new_page()
+                    await page.add_init_script(browser_stealth_script())
+                    await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+                    await self._settle_page(page)
+                    return RenderedPage(html=await page.content(), final_url=page.url)
+                finally:
+                    await context.close()
+            finally:
+                await browser.close()
+
+    async def render_archive_html(self, url: str) -> RenderedPage:
+        """Render an archive.is snapshot page for the given article URL."""
+        archive_url = archive_lookup_url(url)
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=self._settings.chatgpt_browser_headless,
+                args=browser_args(),
+            )
+            try:
+                context = await self._new_context(browser)
+                try:
+                    page = await context.new_page()
+                    await page.add_init_script(browser_stealth_script())
+                    await page.goto(archive_url, wait_until="domcontentloaded", timeout=45_000)
+                    await self._settle_archive_page(page)
+                    return RenderedPage(html=await page.content(), final_url=page.url)
+                finally:
+                    await context.close()
+            finally:
+                await browser.close()
+
+    async def _new_context(self, browser: Browser) -> BrowserContext:
+        return await browser.new_context(
+            locale=self._settings.browser_locale,
+            timezone_id=self._settings.browser_timezone,
+            viewport={"width": 1440, "height": 960},
+        )
+
+    async def _settle_page(self, page: Page) -> None:
+        try:
+            await page.wait_for_load_state("networkidle", timeout=15_000)
+        except TimeoutError:
+            await page.wait_for_timeout(2_000)
+
+    async def _settle_archive_page(self, page: Page) -> None:
+        await self._settle_page(page)
+        title = await page.title()
+        body_text = await page.locator("body").inner_text(timeout=10_000)
+        if looks_like_archive_challenge_page(title, body_text, page.url):
+            await self._click_archive_recaptcha(page)
+            await self._settle_page(page)
+            title = await page.title()
+            body_text = await page.locator("body").inner_text(timeout=10_000)
+        if looks_like_archive_listing_page(title, body_text, page.url):
+            await self._open_latest_archive_snapshot(page)
+            await self._settle_page(page)
+
+    async def _click_archive_recaptcha(self, page: Page) -> None:
+        anchor_frame = next(
+            (frame for frame in page.frames if "recaptcha/api2/anchor" in frame.url),
+            None,
+        )
+        if anchor_frame is None:
+            return
+        anchor = anchor_frame.locator("#recaptcha-anchor")
+        if await anchor.count() == 0:
+            return
+        await anchor.click(timeout=10_000, force=True)
+        await page.wait_for_timeout(8_000)
+
+    async def _open_latest_archive_snapshot(self, page: Page) -> None:
+        snapshot_link = page.locator("#CONTENT .TEXT-BLOCK a[href^='https://archive.is/']").first
+        if await snapshot_link.count() == 0:
+            snapshot_link = page.locator("#CONTENT a[href^='https://archive.is/']").first
+        if await snapshot_link.count() == 0:
+            return
+        snapshot_url = await snapshot_link.get_attribute("href")
+        if snapshot_url:
+            await page.goto(snapshot_url, wait_until="domcontentloaded", timeout=45_000)
+
+
+def archive_lookup_url(url: str) -> str:
+    """Build the archive.is lookup URL for an article."""
+    return f"{ARCHIVE_BASE_URL}{url}"
+
+
+def looks_like_archive_challenge_page(title: str, body_text: str, url: str) -> bool:
+    """Return whether the current archive page is blocked by a CAPTCHA gate."""
+    lowered = f"{title}\n{body_text}\n{url}".lower()
+    markers = (
+        "please complete the security check to access archive.is",
+        "why do i have to complete a captcha",
+        "google.com/recaptcha",
+        "one more step",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def looks_like_archive_listing_page(title: str, body_text: str, url: str) -> bool:
+    """Return whether archive.is is showing the snapshot listing page."""
+    parsed = urlparse(url)
+    lowered = f"{title}\n{body_text}\n{parsed.path}".lower()
+    return (
+        "archive.today" in lowered
+        and "list of urls, ordered from newer to older" in lowered
+        and parsed.netloc.lower() == "archive.is"
+    )

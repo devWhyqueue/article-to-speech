@@ -1,0 +1,29 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_RUNTIME_DIR: /data
+    command: ["run-bot"]
+    volumes:
+      - ./.runtime:/data
+    restart: unless-stopped
+
+  setup-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_RUNTIME_DIR: /data
+    command: ["setup-browser-desktop"]
+    ports:
+      - "6080:6080"
+      - "5900:5900"
+    volumes:
+      - ./.runtime:/data
+    restart: "no"
