@@ -48,18 +48,28 @@ def _runtime_paths(base_dir: Path, values: dict[str, str]) -> tuple[Path, Path, 
 
 
 def _required_values(values: dict[str, str]) -> tuple[str, int, str]:
+    bot_token = _env_text(values, "TELEGRAM_BOT_TOKEN")
+    allowed_chat_id = _env_text(values, "TELEGRAM_ALLOWED_CHAT_ID")
+    project_name = _env_text(values, "CHATGPT_PROJECT_NAME")
     missing = [
         key
-        for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID", "CHATGPT_PROJECT_NAME")
-        if not values.get(key)
+        for key, value in (
+            ("TELEGRAM_BOT_TOKEN", bot_token),
+            ("TELEGRAM_ALLOWED_CHAT_ID", allowed_chat_id),
+            ("CHATGPT_PROJECT_NAME", project_name),
+        )
+        if value is None
     ]
     if missing:
         names = ", ".join(sorted(missing))
         raise ConfigurationError(f"Missing required environment variables: {names}")
+    assert bot_token is not None
+    assert allowed_chat_id is not None
+    assert project_name is not None
     return (
-        values["TELEGRAM_BOT_TOKEN"],
-        int(values["TELEGRAM_ALLOWED_CHAT_ID"]),
-        values["CHATGPT_PROJECT_NAME"],
+        bot_token,
+        int(allowed_chat_id),
+        project_name,
     )
 
 
@@ -90,6 +100,17 @@ def _default_browser_timezone(values: dict[str, str]) -> str | None:
     return _env_text(values, "CHATGPT_BROWSER_TIMEZONE") or _env_text(values, "TZ")
 
 
+def _archive_proxy_urls(values: dict[str, str]) -> tuple[str, ...]:
+    raw_value = _env_text(values, "ARCHIVE_PROXY_URLS")
+    if raw_value is None:
+        return ()
+    return tuple(item.strip() for item in raw_value.split(",") if item.strip())
+
+
+def _archive_proxy_list_url(values: dict[str, str]) -> str | None:
+    return _env_text(values, "ARCHIVE_PROXY_LIST_URL")
+
+
 class SettingsKwargs(TypedDict):
     telegram_bot_token: str
     telegram_allowed_chat_id: int
@@ -103,6 +124,8 @@ class SettingsKwargs(TypedDict):
     chatgpt_browser_headless: bool
     browser_locale: str
     browser_timezone: str | None
+    archive_proxy_urls: tuple[str, ...]
+    archive_proxy_list_url: str | None
 
 
 def _settings_kwargs(base_dir: Path) -> SettingsKwargs:
@@ -126,6 +149,8 @@ def _settings_kwargs(base_dir: Path) -> SettingsKwargs:
         "chatgpt_browser_headless": chatgpt_browser_headless,
         "browser_locale": _default_browser_locale(values),
         "browser_timezone": _default_browser_timezone(values),
+        "archive_proxy_urls": _archive_proxy_urls(values),
+        "archive_proxy_list_url": _archive_proxy_list_url(values),
     }
 
 
@@ -143,6 +168,8 @@ class Settings:
     chatgpt_browser_headless: bool
     browser_locale: str
     browser_timezone: str | None
+    archive_proxy_urls: tuple[str, ...]
+    archive_proxy_list_url: str | None
     http_user_agent: str = (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"

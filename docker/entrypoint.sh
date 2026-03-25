@@ -21,6 +21,20 @@ start_virtual_display() {
   export DISPLAY=:99
   Xvfb "$DISPLAY" -screen 0 1600x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
   BACKGROUND_PIDS+=("$!")
+  wait_for_display
+}
+
+wait_for_display() {
+  local display_number="${DISPLAY#:}"
+  local socket_path="/tmp/.X11-unix/X${display_number}"
+  for _ in $(seq 1 50); do
+    if [[ -S "$socket_path" ]]; then
+      return
+    fi
+    sleep 0.1
+  done
+  echo "Xvfb did not become ready on ${DISPLAY}" >&2
+  exit 1
 }
 
 start_novnc_stack() {

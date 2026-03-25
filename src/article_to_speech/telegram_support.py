@@ -19,7 +19,7 @@ def build_caption(article: ResolvedArticle) -> str:
 
 
 def build_intermediate_article_link(article: ResolvedArticle) -> str | None:
-    """Build an intermediate non-snapshot link message when resolution used an archive URL."""
+    """Build an intermediate archive lookup link message when resolution used an archive URL."""
     if not _is_archive_snapshot_url(article.final_url):
         return None
     url = next(
@@ -32,7 +32,7 @@ def build_intermediate_article_link(article: ResolvedArticle) -> str | None:
     )
     if url is None:
         return None
-    return f"Article link:\n{url}"
+    return f"Article link:\nhttps://archive.is/{url}"
 
 
 def _is_archive_snapshot_url(url: str) -> bool:

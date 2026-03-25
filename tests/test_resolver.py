@@ -72,6 +72,8 @@ def _settings() -> Settings:
         chatgpt_browser_headless=False,
         browser_locale="en-US",
         browser_timezone=None,
+        archive_proxy_urls=(),
+        archive_proxy_list_url=None,
         article_retry_count=3,
     )
 

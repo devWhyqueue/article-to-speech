@@ -26,11 +26,11 @@ from article_to_speech.core.exceptions import AuthenticationRequiredError, Brows
 from article_to_speech.core.models import AudioArtifact, BrowserStepLog
 from article_to_speech.infra.audio import concat_mp3_files, write_base64_audio
 from article_to_speech.infra.browser_audio_files import (
-    _write_direct_segments,
+    _download_audio_sources,
     _write_network_payloads,
 )
 from article_to_speech.infra.browser_audio_runtime import (
-    _extract_audio_segments_from_page,
+    _extract_audio_sources_from_page,
     _record_audio_stream,
     _wait_for_audio_completion,
 )
@@ -173,9 +173,11 @@ async def capture_audio_chunk(
     chunk_dir = diagnostics_dir / f"chunk-{chunk_index:02d}"
     chunk_dir.mkdir(parents=True, exist_ok=True)
     await _wait_for_audio_completion(page, response_payloads, downloads)
-    direct_audio = await _extract_audio_segments_from_page(page)
-    if direct_audio:
-        return _write_direct_segments(chunk_dir, direct_audio)
+    direct_audio_sources = await _extract_audio_sources_from_page(page)
+    if direct_audio_sources:
+        direct_paths = await _download_audio_sources(page, chunk_dir, direct_audio_sources)
+        if direct_paths:
+            return direct_paths
     for download in downloads:
         suggested_name = download.suggested_filename or f"chunk-{chunk_index}.bin"
         download_path = chunk_dir / suggested_name

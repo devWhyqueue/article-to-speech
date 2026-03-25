@@ -9,7 +9,11 @@ from article_to_speech.article.cleaner import NarrationFormatter
 from article_to_speech.article.resolver import ArticleResolver
 from article_to_speech.browser.chatgpt import ChatGPTBrowserAutomation
 from article_to_speech.core.config import Settings
-from article_to_speech.core.exceptions import ArticleToSpeechError, InvalidUrlError
+from article_to_speech.core.exceptions import (
+    ArticleToSpeechError,
+    InvalidUrlError,
+    TelegramConflictError,
+)
 from article_to_speech.core.models import IncomingUrlJob, JobResult, JobStatus
 from article_to_speech.core.urls import extract_first_url, normalize_url
 from article_to_speech.infra.persistence import JobStore
@@ -118,12 +122,21 @@ class TelegramPollingRunner:
 
     async def run(self) -> None:
         await self._service.process_existing_pending_jobs()
+        await self._telegram.delete_webhook()
         await self._telegram.get_me()
         while True:
-            updates = await self._telegram.get_updates(
-                self._next_update_offset,
-                self._settings.telegram_poll_timeout_seconds,
-            )
+            try:
+                updates = await self._telegram.get_updates(
+                    self._next_update_offset,
+                    self._settings.telegram_poll_timeout_seconds,
+                )
+            except TelegramConflictError as error:
+                LOGGER.warning(
+                    "telegram_poll_conflict",
+                    extra={"context": {"error": str(error)}},
+                )
+                await asyncio.sleep(2)
+                continue
             for update in updates:
                 self._next_update_offset = int(update["update_id"]) + 1
                 await self._handle_update(update)

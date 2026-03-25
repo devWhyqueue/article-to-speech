@@ -77,6 +77,15 @@ async def find_editor(page: Page) -> Locator | None:
     return None
 
 
+async def wait_for_editor(page: Page, retries: int = 15) -> bool:
+    """Wait for the ChatGPT composer to appear."""
+    for _ in range(retries):
+        if await find_editor(page) is not None:
+            return True
+        await page.wait_for_timeout(1_000)
+    return False
+
+
 async def fill_editor(editor: Locator, value: str) -> None:
     """Fill either a textarea-based or contenteditable-based ChatGPT editor."""
     tag_name = await editor.evaluate("(element) => element.tagName.toLowerCase()")
@@ -112,3 +121,21 @@ async def locate_read_aloud_button(turn: Locator, page: Page) -> Locator | None:
         if await menu_item.count():
             return menu_item.first
     return None
+
+
+async def open_new_chat(page: Page) -> bool:
+    """Open a fresh ChatGPT chat from the current UI."""
+    selectors = [
+        "a[data-testid='create-new-chat-button']",
+        "button[data-testid='create-new-chat-button']",
+        "a[href='/']",
+    ]
+    if await click_maybe_resilient(page, selectors):
+        await page.wait_for_load_state("domcontentloaded", timeout=60_000)
+        await page.wait_for_timeout(1_500)
+        return True
+    if await click_text(page, "New chat"):
+        await page.wait_for_load_state("domcontentloaded", timeout=60_000)
+        await page.wait_for_timeout(1_500)
+        return True
+    return False

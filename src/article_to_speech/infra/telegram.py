@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from article_to_speech.core.exceptions import TelegramDeliveryError
+from article_to_speech.core.exceptions import TelegramConflictError, TelegramDeliveryError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +30,14 @@ class TelegramBotClient:
             payload["offset"] = offset
         response = await self._request_json("POST", "/getUpdates", json=payload)
         return list(response["result"])
+
+    async def delete_webhook(self) -> None:
+        """Disable webhook delivery so long polling can receive updates."""
+        await self._request_json(
+            "POST",
+            "/deleteWebhook",
+            json={"drop_pending_updates": False},
+        )
 
     async def send_message(self, chat_id: int, text: str) -> None:
         """Send a text message back to Telegram."""
@@ -77,6 +85,8 @@ class TelegramBotClient:
         try:
             response.raise_for_status()
         except httpx.HTTPError as error:
+            if response.status_code == 409:
+                raise TelegramConflictError(_telegram_error_message(response)) from error
             LOGGER.error(
                 "telegram_api_http_error",
                 extra={"context": {"status": response.status_code}},
@@ -87,3 +97,14 @@ class TelegramBotClient:
 def path_exists(path: Path) -> bool:
     """Return whether the given path exists."""
     return path.exists()
+
+
+def _telegram_error_message(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text or f"Telegram API error {response.status_code}"
+    description = payload.get("description")
+    if isinstance(description, str) and description:
+        return description
+    return str(payload)

@@ -32,6 +32,8 @@ from article_to_speech.browser.ui import (
     click_text,
     fill_editor,
     find_editor,
+    open_new_chat,
+    wait_for_editor,
 )
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import AuthenticationRequiredError, BrowserAutomationError
@@ -124,10 +126,16 @@ class ChatGPTBrowserAutomation:
                             chunk_index=request.chunk_index,
                         )
                         for raw_path in raw_paths:
+                            if raw_path.suffix.lower() == ".mp3":
+                                chunk_outputs.append(raw_path)
+                                continue
                             mp3_path = raw_path.with_suffix(".mp3")
                             convert_to_mp3(raw_path, mp3_path)
                             chunk_outputs.append(mp3_path)
 
+                    for task in capture_tasks:
+                        if not task.done():
+                            task.cancel()
                     await asyncio.gather(*capture_tasks, return_exceptions=True)
                     return final_artifact(
                         article.title,
@@ -170,9 +178,17 @@ class ChatGPTBrowserAutomation:
 
     async def _ensure_project_chat(self, page: Page, step_logs: list[BrowserStepLog]) -> None:
         await self._record(step_logs, "ensure_chat", "Using project-local composer")
-        if "/project" in page.url:
+        if await find_editor(page) is not None:
             return
-        raise BrowserAutomationError("ChatGPT did not remain inside the Articles project page.")
+        if "/project" not in page.url:
+            raise BrowserAutomationError(
+                "ChatGPT did not remain inside the configured project page."
+            )
+        if not await open_new_chat(page):
+            raise BrowserAutomationError("Could not open a new project chat in ChatGPT.")
+        if await wait_for_editor(page):
+            return
+        raise BrowserAutomationError("Could not open a project chat composer in ChatGPT.")
 
     async def _send_prompt(
         self,

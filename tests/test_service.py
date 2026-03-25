@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from article_to_speech.core.models import AudioArtifact, IncomingUrlJob, JobStatus, ResolvedArticle
 from article_to_speech.service import ArticleToSpeechService
@@ -115,7 +116,7 @@ class StubFormatter:
         return [article.body_text]
 
 
-async def test_process_job_sends_non_snapshot_article_link_before_audio() -> None:
+async def test_process_job_sends_archive_lookup_link_before_audio() -> None:
     article = ResolvedArticle(
         canonical_url="https://example.com/story",
         original_url="https://example.com/story",
@@ -128,12 +129,12 @@ async def test_process_job_sends_non_snapshot_article_link_before_audio() -> Non
     )
     telegram = StubTelegram()
     service = ArticleToSpeechService(
-        settings=object(),
-        store=StubStore(),
-        telegram=telegram,
-        resolver=StubResolver(article),
-        browser=StubBrowser(),
-        formatter=StubFormatter(),
+        settings=cast(Any, object()),
+        store=cast(Any, StubStore()),
+        telegram=cast(Any, telegram),
+        resolver=cast(Any, StubResolver(article)),
+        browser=cast(Any, StubBrowser()),
+        formatter=cast(Any, StubFormatter()),
     )
     job = IncomingUrlJob(
         job_id=1,
@@ -147,7 +148,7 @@ async def test_process_job_sends_non_snapshot_article_link_before_audio() -> Non
 
     await service.process_job(job, notify_failures=True)
 
-    assert telegram.messages == [(123, "Article link:\nhttps://example.com/story")]
+    assert telegram.messages == [(123, "Article link:\nhttps://archive.is/https://example.com/story")]
     assert len(telegram.audio_calls) == 1
 
 
@@ -164,12 +165,12 @@ async def test_process_job_skips_intermediate_message_for_non_archive_url() -> N
     )
     telegram = StubTelegram()
     service = ArticleToSpeechService(
-        settings=object(),
-        store=StubStore(),
-        telegram=telegram,
-        resolver=StubResolver(article),
-        browser=StubBrowser(),
-        formatter=StubFormatter(),
+        settings=cast(Any, object()),
+        store=cast(Any, StubStore()),
+        telegram=cast(Any, telegram),
+        resolver=cast(Any, StubResolver(article)),
+        browser=cast(Any, StubBrowser()),
+        formatter=cast(Any, StubFormatter()),
     )
     job = IncomingUrlJob(
         job_id=1,

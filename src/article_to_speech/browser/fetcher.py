@@ -7,6 +7,11 @@ from playwright.async_api import Browser, BrowserContext, Page, TimeoutError, as
 
 from article_to_speech.browser.launch import browser_args, browser_stealth_script
 from article_to_speech.core.config import Settings
+from article_to_speech.infra.archive_proxy import (
+    ProxySettings,
+    archive_launch_proxies,
+    resolve_archive_proxy_urls,
+)
 
 ARCHIVE_BASE_URL = "https://archive.is/"
 
@@ -20,6 +25,7 @@ class RenderedPage:
 class BrowserPageFetcher:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._archive_proxy_urls_cache: tuple[str, ...] | None = None
 
     async def render_html(self, url: str) -> RenderedPage:
         """Render a page in Chromium and return the final DOM HTML."""
@@ -45,22 +51,52 @@ class BrowserPageFetcher:
         """Render an archive.is snapshot page for the given article URL."""
         archive_url = archive_lookup_url(url)
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(
-                headless=self._settings.chatgpt_browser_headless,
-                args=browser_args(),
-            )
-            try:
-                context = await self._new_context(browser)
+            last_error: Exception | None = None
+            for proxy in archive_launch_proxies(await self._archive_proxy_urls()):
                 try:
-                    page = await context.new_page()
-                    await page.add_init_script(browser_stealth_script())
-                    await page.goto(archive_url, wait_until="domcontentloaded", timeout=45_000)
-                    await self._settle_archive_page(page)
-                    return RenderedPage(html=await page.content(), final_url=page.url)
-                finally:
-                    await context.close()
+                    return await self._render_archive_with_proxy(playwright, archive_url, proxy)
+                except Exception as error:  # noqa: BLE001
+                    last_error = error
+            if last_error is None:
+                raise TimeoutError("Archive render failed")
+            raise last_error
+
+    async def _archive_proxy_urls(self) -> tuple[str, ...]:
+        if self._archive_proxy_urls_cache is not None:
+            return self._archive_proxy_urls_cache
+        proxy_urls = await resolve_archive_proxy_urls(
+            configured_urls=self._settings.archive_proxy_urls,
+            proxy_list_url=self._settings.archive_proxy_list_url,
+            user_agent=self._settings.http_user_agent,
+        )
+        self._archive_proxy_urls_cache = proxy_urls
+        return proxy_urls
+
+    async def _render_archive_with_proxy(
+        self,
+        playwright,
+        archive_url: str,
+        proxy: ProxySettings | None,
+    ) -> RenderedPage:
+        launch_kwargs: dict[str, object] = {
+            "headless": self._settings.chatgpt_browser_headless,
+            "args": browser_args(),
+        }
+        if proxy is not None:
+            launch_kwargs["proxy"] = proxy
+        browser = await playwright.chromium.launch(**launch_kwargs)
+        try:
+            context = await self._new_context(browser)
+            try:
+                page = await context.new_page()
+                await page.add_init_script(browser_stealth_script())
+                await page.goto(archive_url, wait_until="domcontentloaded", timeout=45_000)
+                await self._settle_archive_page(page)
+                return RenderedPage(html=await page.content(), final_url=page.url)
             finally:
-                await browser.close()
+                await context.close()
+        finally:
+            await browser.close()
 
     async def _new_context(self, browser: Browser) -> BrowserContext:
         return await browser.new_context(

@@ -5,12 +5,12 @@ from typing import cast
 from playwright.async_api import Error, Page
 
 
-async def _extract_audio_segments_from_page(page: Page) -> list[dict[str, str]]:
+async def _extract_audio_sources_from_page(page: Page) -> list[dict[str, str]]:
     for _ in range(20):
         try:
             result = await page.evaluate(
                 """
-                async () => {
+                () => {
                     const state = window.__atsAudioState || { sources: [] };
                     const audioElements = Array.from(document.querySelectorAll("audio"));
                     const sourceUrls = [];
@@ -29,23 +29,16 @@ async def _extract_audio_segments_from_page(page: Page) -> list[dict[str, str]]:
                     if (!sourceUrls.length) {
                         return [];
                     }
-                    const segments = [];
+                    const sources = [];
                     for (const url of sourceUrls) {
-                        const response = await fetch(url);
-                        const buffer = await response.arrayBuffer();
-                        const bytes = new Uint8Array(buffer);
-                        let binary = "";
-                        for (const value of bytes) {
-                            binary += String.fromCharCode(value);
-                        }
                         const format = url.includes(".mp3")
                             ? "mp3"
                             : url.includes(".m4a")
                               ? "m4a"
                               : "webm";
-                        segments.push({ mode: "bytes", payload: btoa(binary), format, url });
+                        sources.push({ format, url });
                     }
-                    return segments;
+                    return sources;
                 }
                 """
             )
@@ -59,47 +52,50 @@ async def _extract_audio_segments_from_page(page: Page) -> list[dict[str, str]]:
 
 async def _record_audio_stream(page: Page) -> str | None:
     for _ in range(15):
-        recorded = await page.evaluate(
-            """
-            async () => {
-                const audio = document.querySelector("audio");
-                if (!audio || typeof audio.captureStream !== "function") {
-                    return null;
-                }
-                const stream = audio.captureStream();
-                const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-                const chunks = [];
-                return await new Promise((resolve) => {
-                    recorder.ondataavailable = (event) => {
-                        if (event.data.size) {
-                            chunks.push(event.data);
-                        }
-                    };
-                    recorder.onstop = async () => {
-                        const blob = new Blob(chunks, { type: "audio/webm" });
-                        const buffer = await blob.arrayBuffer();
-                        const bytes = new Uint8Array(buffer);
-                        let binary = "";
-                        for (const value of bytes) {
-                            binary += String.fromCharCode(value);
-                        }
-                        resolve(btoa(binary));
-                    };
-                    const stopRecording = () => {
-                        if (recorder.state !== "inactive") {
-                            recorder.stop();
-                        }
-                    };
-                    audio.addEventListener("ended", stopRecording, { once: true });
-                    recorder.start();
-                    if (audio.paused) {
-                        audio.play().catch(() => {});
+        try:
+            recorded = await page.evaluate(
+                """
+                async () => {
+                    const audio = document.querySelector("audio");
+                    if (!audio || typeof audio.captureStream !== "function") {
+                        return null;
                     }
-                    setTimeout(stopRecording, 3600000);
-                });
-            }
-            """
-        )
+                    const stream = audio.captureStream();
+                    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+                    const chunks = [];
+                    return await new Promise((resolve) => {
+                        recorder.ondataavailable = (event) => {
+                            if (event.data.size) {
+                                chunks.push(event.data);
+                            }
+                        };
+                        recorder.onstop = async () => {
+                            const blob = new Blob(chunks, { type: "audio/webm" });
+                            const buffer = await blob.arrayBuffer();
+                            const bytes = new Uint8Array(buffer);
+                            let binary = "";
+                            for (const value of bytes) {
+                                binary += String.fromCharCode(value);
+                            }
+                            resolve(btoa(binary));
+                        };
+                        const stopRecording = () => {
+                            if (recorder.state !== "inactive") {
+                                recorder.stop();
+                            }
+                        };
+                        audio.addEventListener("ended", stopRecording, { once: true });
+                        recorder.start();
+                        if (audio.paused) {
+                            audio.play().catch(() => {});
+                        }
+                        setTimeout(stopRecording, 3600000);
+                    });
+                }
+                """
+            )
+        except Error:
+            recorded = None
         if isinstance(recorded, str) and recorded:
             return recorded
         await page.wait_for_timeout(1_000)

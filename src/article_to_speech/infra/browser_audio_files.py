@@ -3,30 +3,71 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from playwright.async_api import Error, Page
+
 from article_to_speech.browser.capture import extension_from_audio
 from article_to_speech.infra.audio import write_audio_bytes, write_base64_audio
 
 
-def _write_direct_audio(
+def _audio_output_path(
     chunk_dir: Path,
-    direct_audio: dict[str, str],
+    audio_source: dict[str, str],
     stem: str = "chatgpt-audio",
 ) -> Path:
-    if direct_audio["format"] == "mp3":
+    if audio_source["format"] == "mp3":
         extension = ".mp3"
-    elif direct_audio["format"] == "m4a":
+    elif audio_source["format"] == "m4a":
         extension = ".m4a"
     else:
         extension = ".webm"
-    output_path = chunk_dir / f"{stem}{extension}"
-    return write_base64_audio(output_path, direct_audio["payload"], "browser_state").path
+    return chunk_dir / f"{stem}{extension}"
 
 
-def _write_direct_segments(chunk_dir: Path, segments: list[dict[str, str]]) -> list[Path]:
+async def _download_audio_sources(
+    page: Page, chunk_dir: Path, sources: list[dict[str, str]]
+) -> list[Path]:
     paths: list[Path] = []
-    for index, segment in enumerate(segments, start=1):
-        stem = "chatgpt-audio" if len(segments) == 1 else f"chatgpt-audio-{index:02d}"
-        paths.append(_write_direct_audio(chunk_dir, segment, stem))
+    seen_urls: set[str] = set()
+    for index, source in enumerate(sources, start=1):
+        url = source["url"]
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        stem = "chatgpt-audio" if len(sources) == 1 else f"chatgpt-audio-{index:02d}"
+        output_path = _audio_output_path(chunk_dir, source, stem)
+        if url.startswith("blob:"):
+            try:
+                payload = await page.evaluate(
+                    """
+                    async sourceUrl => {
+                        const response = await fetch(sourceUrl);
+                        const buffer = await response.arrayBuffer();
+                        const bytes = new Uint8Array(buffer);
+                        let binary = "";
+                        for (const value of bytes) {
+                            binary += String.fromCharCode(value);
+                        }
+                        return btoa(binary);
+                    }
+                    """,
+                    url,
+                )
+            except Error:
+                continue
+            if isinstance(payload, str) and payload:
+                paths.append(write_base64_audio(output_path, payload, "browser_blob").path)
+            continue
+        try:
+            response = await page.context.request.get(url)
+        except Error:
+            continue
+        if not response.ok:
+            continue
+        payload = await response.body()
+        if not payload:
+            continue
+        write_audio_bytes(output_path, payload)
+        paths.append(output_path)
     return paths
 
 

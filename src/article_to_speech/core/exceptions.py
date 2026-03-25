@@ -24,3 +24,7 @@ class BrowserAutomationError(ArticleToSpeechError):
 
 class TelegramDeliveryError(ArticleToSpeechError):
     """Raised when Telegram delivery fails."""
+
+
+class TelegramConflictError(TelegramDeliveryError):
+    """Raised when another Telegram long-poll session is already active."""
