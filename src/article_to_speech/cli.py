@@ -5,7 +5,7 @@ import asyncio
 
 from article_to_speech.core.config import Settings
 from article_to_speech.core.logging_config import configure_logging
-from article_to_speech.service import run_bot, run_process_url, run_setup_browser, run_validate_live
+from article_to_speech.service import run_bot, run_process_url, run_setup_browser
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,12 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process_parser.add_argument("url")
     process_parser.add_argument("--chat-id", type=int)
-
-    validate_parser = subparsers.add_parser(
-        "validate-live",
-        help="Process the provided URLs through the full live pipeline.",
-    )
-    validate_parser.add_argument("urls", nargs="+")
     return parser
 
 
@@ -45,7 +39,5 @@ def main() -> int:
         return 0
     if args.command == "process-url":
         return asyncio.run(run_process_url(settings, args))
-    if args.command == "validate-live":
-        return asyncio.run(run_validate_live(settings, args))
     parser.error(f"Unsupported command: {args.command}")
     return 2

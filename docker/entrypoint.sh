@@ -50,7 +50,7 @@ declare -a BACKGROUND_PIDS=()
 trap cleanup EXIT
 
 case "$MODE" in
-  run-bot|process-url|validate-live|setup-browser)
+  run-bot|process-url|setup-browser)
     start_virtual_display
     run_uv "$@"
     ;;

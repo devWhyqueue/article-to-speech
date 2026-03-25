@@ -13,9 +13,11 @@ from article_to_speech.infra.archive_proxy import (
     resolve_archive_proxy_urls,
 )
 from article_to_speech.browser.fetcher import (
+    archive_lookup_urls,
     archive_lookup_url,
     looks_like_archive_challenge_page,
     looks_like_archive_listing_page,
+    looks_like_archive_no_results_page,
 )
 
 
@@ -23,6 +25,21 @@ def test_archive_lookup_url_wraps_target_url() -> None:
     url = "https://example.com/story"
 
     assert archive_lookup_url(url) == "https://archive.is/https://example.com/story"
+
+
+def test_archive_lookup_urls_include_queryless_fallback() -> None:
+    url = "https://example.com/story?ref=share&foo=bar"
+
+    assert archive_lookup_urls(url) == (
+        "https://archive.is/https://example.com/story?ref=share&foo=bar",
+        "https://archive.is/https://example.com/story",
+    )
+
+
+def test_archive_lookup_urls_skip_duplicate_when_url_has_no_query() -> None:
+    url = "https://example.com/story"
+
+    assert archive_lookup_urls(url) == ("https://archive.is/https://example.com/story",)
 
 
 def test_archive_challenge_page_detection_matches_recaptcha_gate() -> None:
@@ -39,6 +56,19 @@ def test_archive_listing_page_detection_matches_snapshot_index() -> None:
             "example title",
             body,
             "https://archive.is/https://example.com/story",
+        )
+        is True
+    )
+
+
+def test_archive_no_results_page_detection_matches_empty_search_page() -> None:
+    body = "archive.today\nwebpage capture\nNo results\nYou may want to archive this url"
+
+    assert (
+        looks_like_archive_no_results_page(
+            "example title",
+            body,
+            "https://archive.is/https://example.com/story?ref=share",
         )
         is True
     )

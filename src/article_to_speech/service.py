@@ -223,22 +223,5 @@ async def run_process_url(settings: Settings, args: argparse.Namespace) -> int:
         await service.close()
 
 
-async def run_validate_live(settings: Settings, args: argparse.Namespace) -> int:
-    service = build_service(settings)
-    urls = list(args.urls)
-    exit_code = 0
-    try:
-        for url in urls:
-            job = service.enqueue_from_message(
-                chat_id=settings.telegram_allowed_chat_id, message_id=None, text=url
-            )
-            result = await service.process_job(job, notify_failures=True)
-            if result is None:
-                exit_code = 1
-        return exit_code
-    finally:
-        await service.close()
-
-
 async def run_setup_browser(settings: Settings) -> None:
     await ChatGPTBrowserAutomation(settings).bootstrap_login()

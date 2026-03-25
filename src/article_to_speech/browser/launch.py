@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NotRequired, TextIO, TypedDict
+from typing import Any, NotRequired, TextIO, TypedDict, cast
 
 from playwright.async_api import BrowserContext, Error, Playwright
 
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import BrowserAutomationError
+from article_to_speech.infra.archive_proxy import parse_proxy_settings
 
 _LOCK_EX = fcntl.LOCK_EX  # pyright: ignore[reportAttributeAccessIssue]
 _LOCK_NB = fcntl.LOCK_NB  # pyright: ignore[reportAttributeAccessIssue]
@@ -29,8 +31,35 @@ class BrowserContextOptions(TypedDict):
     args: list[str]
     ignore_default_args: list[str]
     locale: str
+    user_agent: str
+    proxy: NotRequired[dict[str, str | None]]
     timezone_id: NotRequired[str]
     viewport: ViewportSize
+
+
+_STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'language', { get: () => 'en-US' });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+const makePlugin = (name) => ({ name, filename: `${name}.so`, description: name });
+const plugins = [makePlugin('PDF Viewer'), makePlugin('Chrome PDF Viewer'), makePlugin('Chromium PDF Viewer'), makePlugin('Microsoft Edge PDF Viewer'), makePlugin('WebKit built-in PDF')];
+plugins.item = index => plugins[index] ?? null;
+plugins.namedItem = name => plugins.find(plugin => plugin.name === name) ?? null;
+Object.defineProperty(navigator, 'plugins', { get: () => plugins });
+const mimeTypes = [{ type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' }];
+mimeTypes.item = index => mimeTypes[index] ?? null;
+mimeTypes.namedItem = name => mimeTypes.find(item => item.type === name) ?? null;
+Object.defineProperty(navigator, 'mimeTypes', { get: () => mimeTypes });
+window.chrome = window.chrome || { runtime: {}, app: {} };
+const permissions = window.navigator.permissions;
+const originalQuery = permissions?.query?.bind(permissions);
+if (originalQuery) {
+  permissions.query = parameters => (
+    parameters?.name === 'notifications' ? Promise.resolve({ state: Notification.permission }) : originalQuery(parameters)
+  );
+}
+"""
 
 
 class BrowserProfileLease:
@@ -84,6 +113,7 @@ def hold_browser_profile(profile_dir: Path) -> Iterator[BrowserProfileLease]:
     lease.acquire()
     try:
         lease.clear_stale_chromium_locks()
+        normalize_profile_shutdown_state(profile_dir)
         yield lease
     finally:
         lease.release()
@@ -100,6 +130,8 @@ async def launch_chatgpt_context(playwright: Playwright, settings: Settings) -> 
             args=options["args"],
             ignore_default_args=options["ignore_default_args"],
             locale=options["locale"],
+            user_agent=options["user_agent"],
+            proxy=cast(Any, options.get("proxy")),
             timezone_id=options.get("timezone_id"),
             viewport=options["viewport"],
         )
@@ -128,8 +160,13 @@ def build_browser_context_options(settings: Settings) -> BrowserContextOptions:
         "args": browser_args(),
         "ignore_default_args": ["--enable-automation"],
         "locale": settings.browser_locale,
+        "user_agent": settings.http_user_agent,
         "viewport": {"width": 1440, "height": 960},
     }
+    if settings.chatgpt_proxy_url is not None:
+        options["proxy"] = cast(
+            dict[str, str | None], dict(parse_proxy_settings(settings.chatgpt_proxy_url))
+        )
     if settings.browser_timezone is not None:
         options["timezone_id"] = settings.browser_timezone
     return options
@@ -142,18 +179,36 @@ def browser_args() -> list[str]:
         "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
         "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
         "--no-first-run",
         "--no-default-browser-check",
         "--start-maximized",
     ]
 
 
+def setup_browser_args(profile_dir: Path, start_url: str) -> list[str]:
+    """Return Chromium flags for a manual setup-browser session."""
+    return [
+        f"--user-data-dir={profile_dir}",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-setuid-sandbox",
+        "--disable-session-crashed-bubble",
+        "--disable-software-rasterizer",
+        "--hide-crash-restore-bubble",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--new-window",
+        "--no-sandbox",
+        "--start-maximized",
+        start_url,
+    ]
+
+
 def browser_stealth_script() -> str:
-    """Return a small init script that reduces obvious automation fingerprints."""
-    return """
-    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-    window.chrome = window.chrome || { runtime: {} };
-    """
+    """Return an init script that reduces obvious automation fingerprints."""
+    return _STEALTH_SCRIPT
 
 
 def _is_missing_symlink_target(path: Path) -> bool:
@@ -173,3 +228,22 @@ def _looks_like_missing_browser_dependency_error(message: str) -> bool:
         or "error while loading shared libraries" in lowered
         or "host system is missing dependencies" in lowered
     )
+
+
+def normalize_profile_shutdown_state(profile_dir: Path) -> None:
+    """Mark Chromium profile state as clean to suppress crash-restore UI."""
+    for relative_path in (Path("Default/Preferences"), Path("Local State")):
+        candidate = profile_dir / relative_path
+        _rewrite_shutdown_state(candidate)
+
+
+def _rewrite_shutdown_state(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    payload["exit_type"] = "Normal"
+    payload["exited_cleanly"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")

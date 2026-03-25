@@ -120,3 +120,41 @@ def test_settings_parse_archive_proxy_list_url(tmp_path, monkeypatch) -> None:
     settings = Settings.load(tmp_path)
 
     assert settings.archive_proxy_list_url == "https://proxy.example/list.txt"
+
+
+def test_settings_parse_chatgpt_proxy_url(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "TELEGRAM_BOT_TOKEN=test-token",
+                "TELEGRAM_ALLOWED_CHAT_ID=123",
+                "CHATGPT_PROJECT_NAME=Articles",
+                "CHATGPT_PROXY_URL=http://user:pass@proxy.example:8080",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.chatgpt_proxy_url == "http://user:pass@proxy.example:8080"
+
+
+def test_settings_parse_chatgpt_project_url(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "TELEGRAM_BOT_TOKEN=test-token",
+                "TELEGRAM_ALLOWED_CHAT_ID=123",
+                "CHATGPT_PROJECT_NAME=Articles",
+                "CHATGPT_PROJECT_URL=https://chatgpt.com/g/g-p-example-articles/project",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.chatgpt_project_url == "https://chatgpt.com/g/g-p-example-articles/project"

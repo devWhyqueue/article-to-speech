@@ -100,6 +100,14 @@ def _default_browser_timezone(values: dict[str, str]) -> str | None:
     return _env_text(values, "CHATGPT_BROWSER_TIMEZONE") or _env_text(values, "TZ")
 
 
+def _chatgpt_proxy_url(values: dict[str, str]) -> str | None:
+    return _env_text(values, "CHATGPT_PROXY_URL")
+
+
+def _chatgpt_project_url(values: dict[str, str]) -> str | None:
+    return _env_text(values, "CHATGPT_PROJECT_URL")
+
+
 def _archive_proxy_urls(values: dict[str, str]) -> tuple[str, ...]:
     raw_value = _env_text(values, "ARCHIVE_PROXY_URLS")
     if raw_value is None:
@@ -124,6 +132,8 @@ class SettingsKwargs(TypedDict):
     chatgpt_browser_headless: bool
     browser_locale: str
     browser_timezone: str | None
+    chatgpt_proxy_url: str | None
+    chatgpt_project_url: str | None
     archive_proxy_urls: tuple[str, ...]
     archive_proxy_list_url: str | None
 
@@ -149,6 +159,8 @@ def _settings_kwargs(base_dir: Path) -> SettingsKwargs:
         "chatgpt_browser_headless": chatgpt_browser_headless,
         "browser_locale": _default_browser_locale(values),
         "browser_timezone": _default_browser_timezone(values),
+        "chatgpt_proxy_url": _chatgpt_proxy_url(values),
+        "chatgpt_project_url": _chatgpt_project_url(values),
         "archive_proxy_urls": _archive_proxy_urls(values),
         "archive_proxy_list_url": _archive_proxy_list_url(values),
     }
@@ -168,6 +180,8 @@ class Settings:
     chatgpt_browser_headless: bool
     browser_locale: str
     browser_timezone: str | None
+    chatgpt_proxy_url: str | None
+    chatgpt_project_url: str | None
     archive_proxy_urls: tuple[str, ...]
     archive_proxy_list_url: str | None
     http_user_agent: str = (

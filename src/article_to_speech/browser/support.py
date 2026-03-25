@@ -16,12 +16,7 @@ from article_to_speech.browser.capture import (
     maybe_capture_response_bytes,
     write_diagnostics,
 )
-from article_to_speech.browser.ui import (
-    click_maybe,
-    click_text,
-    fill_first,
-    locate_read_aloud_button,
-)
+from article_to_speech.browser.ui import locate_read_aloud_button
 from article_to_speech.core.exceptions import AuthenticationRequiredError, BrowserAutomationError
 from article_to_speech.core.models import AudioArtifact, BrowserStepLog
 from article_to_speech.infra.audio import concat_mp3_files, write_base64_audio
@@ -40,6 +35,37 @@ LOGIN_TEXT_PATTERN = re.compile(
     re.I,
 )
 LOGGER = logging.getLogger(__name__)
+_CLOUDFLARE_COOKIE_NAMES = ("cf_clearance", "__cf_bm", "__cflb")
+
+
+async def clear_chatgpt_challenge_cookies(context: BrowserContext) -> None:
+    """Drop Cloudflare cookies while preserving the actual ChatGPT session cookies."""
+    for cookie_name in _CLOUDFLARE_COOKIE_NAMES:
+        await context.clear_cookies(name=cookie_name)
+
+
+async def wait_for_challenge_to_clear(page: Page, retries: int = 20) -> bool:
+    """Wait for a transient Cloudflare page to resolve on its own."""
+    for _ in range(retries):
+        title = await page.title()
+        body_text = await page.locator("body").inner_text(timeout=5_000)
+        if not looks_like_challenge_page(title, body_text, page.url):
+            return True
+        await page.wait_for_timeout(1_000)
+    return False
+
+
+def looks_like_challenge_page(title: str, body_text: str, url: str) -> bool:
+    """Return whether the current page matches a Cloudflare or anti-bot challenge."""
+    lowered = f"{title}\n{body_text}\n{url}".lower()
+    markers = (
+        "just a moment",
+        "challenge-platform",
+        "verification successful. waiting for chatgpt.com to respond",
+        "enable javascript and cookies to continue",
+        "cf_chl",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 async def ensure_authenticated(page: Page) -> None:
@@ -65,44 +91,6 @@ async def ensure_authenticated(page: Page) -> None:
         )
 
 
-async def create_project(page: Page, project_name: str) -> None:
-    """Create the target ChatGPT project when it does not already exist."""
-    if not await click_text(page, "New project"):
-        raise BrowserAutomationError(f"Unable to find or create ChatGPT project '{project_name}'.")
-    await page.wait_for_timeout(1_000)
-    filled = await fill_first(
-        page,
-        [
-            "input[placeholder*='Project']",
-            "input[name='name']",
-            "input[type='text']",
-        ],
-        project_name,
-    )
-    if not filled:
-        raise BrowserAutomationError(
-            "Project creation dialog appeared but no project name input was found."
-        )
-    if not await click_text(page, "Create"):
-        raise BrowserAutomationError("Failed to confirm ChatGPT project creation.")
-    await page.wait_for_timeout(2_000)
-
-
-async def get_or_create_page(context: BrowserContext) -> Page:
-    """Reuse the first persistent page or open a new one."""
-    return context.pages[0] if context.pages else await context.new_page()
-
-
-async def submit_prompt(page: Page) -> None:
-    """Submit the current ChatGPT composer contents."""
-    if not await click_maybe(
-        page,
-        ["button[data-testid='send-button']", "button[aria-label*='Send']"],
-    ):
-        await page.keyboard.press("Enter")
-    await page.wait_for_timeout(1_000)
-
-
 def response_listener(
     response_payloads: list[tuple[str, str, bytes]],
     capture_tasks: list[asyncio.Task[None]],
@@ -114,6 +102,31 @@ def response_listener(
         capture_tasks.append(task)
 
     return _listener
+
+
+async def wait_for_assistant_response(page: Page, previous_count: int) -> None:
+    """Wait until a newly submitted assistant response is fully rendered."""
+    await page.wait_for_function(
+        """
+        expectedCount => (
+            document.querySelectorAll("[data-message-author-role='assistant']").length
+            > expectedCount
+        )
+        """,
+        arg=previous_count,
+        timeout=180_000,
+    )
+    await page.wait_for_function(
+        """
+        () => {
+            const turn = document.querySelector("section[data-turn='assistant']:last-of-type");
+            if (!turn) return false;
+            return !turn.querySelector("[aria-busy='true']");
+        }
+        """,
+        timeout=600_000,
+    )
+    await page.wait_for_timeout(1_500)
 
 
 def final_artifact(
@@ -140,19 +153,6 @@ def final_artifact(
     return concat_mp3_files(chunk_outputs, output_path)
 
 
-def looks_like_challenge_page(title: str, body_text: str, url: str) -> bool:
-    """Return whether the current page matches a Cloudflare or anti-bot challenge."""
-    lowered = f"{title}\n{body_text}\n{url}".lower()
-    markers = (
-        "just a moment",
-        "challenge-platform",
-        "verification successful. waiting for chatgpt.com to respond",
-        "enable javascript and cookies to continue",
-        "cf_chl",
-    )
-    return any(marker in lowered for marker in markers)
-
-
 async def capture_audio_chunk(
     *,
     page: Page,
@@ -164,15 +164,26 @@ async def capture_audio_chunk(
     """Capture one narrated audio chunk from the active assistant response."""
     downloads.clear()
     response_payloads.clear()
+    chunk_dir = diagnostics_dir / f"chunk-{chunk_index:02d}"
+    chunk_dir.mkdir(parents=True, exist_ok=True)
     assistant_turn = page.locator("section[data-turn='assistant']").last
     await assistant_turn.hover(timeout=10_000)
     read_aloud_button = await locate_read_aloud_button(assistant_turn, page)
     if read_aloud_button is None:
         raise BrowserAutomationError("Could not find the ChatGPT read-aloud control.")
+    LOGGER.info("chatgpt_audio_control_found")
     await read_aloud_button.click(timeout=10_000)
-    chunk_dir = diagnostics_dir / f"chunk-{chunk_index:02d}"
-    chunk_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.info("chatgpt_audio_capture_wait_start")
     await _wait_for_audio_completion(page, response_payloads, downloads)
+    LOGGER.info(
+        "chatgpt_audio_capture_wait_done",
+        extra={
+            "context": {
+                "downloads": len(downloads),
+                "response_payloads": len(response_payloads),
+            }
+        },
+    )
     direct_audio_sources = await _extract_audio_sources_from_page(page)
     if direct_audio_sources:
         direct_paths = await _download_audio_sources(page, chunk_dir, direct_audio_sources)
@@ -200,14 +211,12 @@ async def capture_audio_chunk(
 async def monitor_setup_challenge(page: Page, diagnostics_dir: Path) -> None:
     """Capture setup-browser diagnostics when ChatGPT stays on a challenge page."""
     wrote_snapshot = False
-    while True:
+    while not page.is_closed():
         try:
             await page.wait_for_timeout(5_000)
             title = await page.title()
             body_text = await page.locator("body").inner_text(timeout=5_000)
-            if not looks_like_challenge_page(title, body_text, page.url):
-                continue
-            if wrote_snapshot:
+            if not looks_like_challenge_page(title, body_text, page.url) or wrote_snapshot:
                 continue
             wrote_snapshot = True
             snapshot = await collect_browser_snapshot(page)
@@ -228,4 +237,11 @@ async def monitor_setup_challenge(page: Page, diagnostics_dir: Path) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001
+            if page.is_closed() or _is_closed_page_error(error):
+                return
             LOGGER.warning("setup_browser_monitor_failed", exc_info=error)
+
+
+def _is_closed_page_error(error: Exception) -> bool:
+    """Return whether the exception only indicates expected page shutdown."""
+    return "Target page, context or browser has been closed" in str(error)

@@ -40,15 +40,6 @@ One-shot processing:
 uv run article-to-speech process-url "https://example.com/article"
 ```
 
-Live validation:
-
-```bash
-uv run article-to-speech validate-live \
-  "https://www.nytimes.com/2026/03/24/us/politics/supreme-court-trump-asylum-seekers.html" \
-  "https://www.zeit.de/politik/ausland/2026-03/strasse-von-hormus-blockade-schiffe-tanker-irankrieg" \
-  "https://www.sueddeutsche.de/kultur/sexualstrafrecht-jurastudium-deutschland-sexualisierte-gewalt-li.3456755?reduced=true"
-```
-
 Preferred ChatGPT bootstrap flow on WSLg:
 
 ```bash
@@ -78,13 +69,11 @@ Then open [http://localhost:6080/vnc.html](http://localhost:6080/vnc.html), comp
 
 If you need to force headless mode for debugging outside Docker, set `CHATGPT_BROWSER_HEADLESS=true`.
 
-Run live validation inside Docker:
+Run one-shot processing inside Docker:
 
 ```bash
-docker compose run --rm app validate-live \
-  "https://www.nytimes.com/2026/03/24/us/politics/supreme-court-trump-asylum-seekers.html" \
-  "https://www.zeit.de/politik/ausland/2026-03/strasse-von-hormus-blockade-schiffe-tanker-irankrieg" \
-  "https://www.sueddeutsche.de/kultur/sexualstrafrecht-jurastudium-deutschland-sexualisierte-gewalt-li.3456755?reduced=true"
+docker compose run --rm app process-url \
+  "https://www.nytimes.com/2026/03/24/us/politics/supreme-court-trump-asylum-seekers.html"
 ```
 
 ## Runtime layout

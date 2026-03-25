@@ -49,15 +49,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /uvx /bin/
 
-COPY pyproject.toml README.md pyrightconfig.json ./
-RUN uv sync --no-dev --no-install-project
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project && \
+    uv run playwright install chromium
 
 COPY src ./src
-COPY tests ./tests
 COPY docker ./docker
 
-RUN uv sync --no-dev && \
-    uv run playwright install chromium
+RUN uv sync --frozen --no-dev
 
 RUN mkdir -p /data/profile /data/state /data/artifacts /data/diagnostics
 

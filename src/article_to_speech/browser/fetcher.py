@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from playwright.async_api import Browser, BrowserContext, Page, TimeoutError, async_playwright
 
@@ -49,14 +49,14 @@ class BrowserPageFetcher:
 
     async def render_archive_html(self, url: str) -> RenderedPage:
         """Render an archive.is snapshot page for the given article URL."""
-        archive_url = archive_lookup_url(url)
         async with async_playwright() as playwright:
             last_error: Exception | None = None
-            for proxy in archive_launch_proxies(await self._archive_proxy_urls()):
-                try:
-                    return await self._render_archive_with_proxy(playwright, archive_url, proxy)
-                except Exception as error:  # noqa: BLE001
-                    last_error = error
+            for archive_url in archive_lookup_urls(url):
+                for proxy in archive_launch_proxies(await self._archive_proxy_urls()):
+                    try:
+                        return await self._render_archive_with_proxy(playwright, archive_url, proxy)
+                    except Exception as error:  # noqa: BLE001
+                        last_error = error
             if last_error is None:
                 raise TimeoutError("Archive render failed")
             raise last_error
@@ -102,6 +102,7 @@ class BrowserPageFetcher:
         return await browser.new_context(
             locale=self._settings.browser_locale,
             timezone_id=self._settings.browser_timezone,
+            user_agent=self._settings.http_user_agent,
             viewport={"width": 1440, "height": 960},
         )
 
@@ -120,9 +121,20 @@ class BrowserPageFetcher:
             await self._settle_page(page)
             title = await page.title()
             body_text = await page.locator("body").inner_text(timeout=10_000)
+            if looks_like_archive_challenge_page(title, body_text, page.url):
+                raise TimeoutError("Archive challenge page persisted after retry")
         if looks_like_archive_listing_page(title, body_text, page.url):
+            listing_url = page.url
             await self._open_latest_archive_snapshot(page)
             await self._settle_page(page)
+            title = await page.title()
+            body_text = await page.locator("body").inner_text(timeout=10_000)
+            if page.url == listing_url and looks_like_archive_listing_page(
+                title, body_text, page.url
+            ):
+                raise TimeoutError("Archive listing page did not open a snapshot")
+        if looks_like_archive_no_results_page(title, body_text, page.url):
+            raise TimeoutError("Archive lookup returned no results")
 
     async def _click_archive_recaptcha(self, page: Page) -> None:
         anchor_frame = next(
@@ -153,6 +165,18 @@ def archive_lookup_url(url: str) -> str:
     return f"{ARCHIVE_BASE_URL}{url}"
 
 
+def archive_lookup_urls(url: str) -> tuple[str, ...]:
+    """Build archive lookup URLs, including a queryless fallback when useful."""
+    lookup_urls = [archive_lookup_url(url)]
+    parsed = urlsplit(url)
+    if parsed.query:
+        queryless_url = urlunsplit(parsed._replace(query=""))
+        queryless_lookup_url = archive_lookup_url(queryless_url)
+        if queryless_lookup_url not in lookup_urls:
+            lookup_urls.append(queryless_lookup_url)
+    return tuple(lookup_urls)
+
+
 def looks_like_archive_challenge_page(title: str, body_text: str, url: str) -> bool:
     """Return whether the current archive page is blocked by a CAPTCHA gate."""
     lowered = f"{title}\n{body_text}\n{url}".lower()
@@ -172,5 +196,17 @@ def looks_like_archive_listing_page(title: str, body_text: str, url: str) -> boo
     return (
         "archive.today" in lowered
         and "list of urls, ordered from newer to older" in lowered
+        and parsed.netloc.lower() == "archive.is"
+    )
+
+
+def looks_like_archive_no_results_page(title: str, body_text: str, url: str) -> bool:
+    """Return whether archive.is is showing a search page with no snapshots."""
+    parsed = urlparse(url)
+    lowered = f"{title}\n{body_text}\n{parsed.path}".lower()
+    return (
+        "archive.today" in lowered
+        and "webpage capture" in lowered
+        and "no results" in lowered
         and parsed.netloc.lower() == "archive.is"
     )

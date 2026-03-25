@@ -6,7 +6,12 @@ from typing import Any, cast
 import pytest
 
 from article_to_speech.browser.capture import collect_browser_snapshot
-from article_to_speech.browser.launch import browser_args, build_browser_context_options
+from article_to_speech.browser.launch import (
+    browser_args,
+    build_browser_context_options,
+    normalize_profile_shutdown_state,
+    setup_browser_args,
+)
 from article_to_speech.core.config import Settings
 
 
@@ -24,7 +29,7 @@ def _write_env_file(tmp_path, *extra_lines: str) -> None:
     )
 
 
-def test_build_browser_context_options_keep_existing_args_and_skip_user_agent(
+def test_build_browser_context_options_keep_existing_args_and_include_user_agent(
     tmp_path, monkeypatch
 ) -> None:
     _write_env_file(tmp_path)
@@ -37,10 +42,10 @@ def test_build_browser_context_options_keep_existing_args_and_skip_user_agent(
     assert options["headless"] is True
     assert options["accept_downloads"] is True
     assert options["locale"] == "en-US"
+    assert options["user_agent"] == settings.http_user_agent
     assert args == browser_args()
     assert "--disable-blink-features=AutomationControlled" in args
     assert "--start-maximized" in args
-    assert "user_agent" not in options
     assert "timezone_id" not in options
 
 
@@ -56,6 +61,64 @@ def test_build_browser_context_options_include_timezone_override(tmp_path) -> No
 
     assert options["locale"] == "de-DE"
     assert options.get("timezone_id") == "Europe/Berlin"
+
+
+def test_build_browser_context_options_include_proxy_override(tmp_path) -> None:
+    _write_env_file(tmp_path, "CHATGPT_PROXY_URL=http://user:pass@proxy.example:8080")
+
+    settings = Settings.load(tmp_path)
+    options = build_browser_context_options(settings)
+
+    assert options.get("proxy") == {
+        "server": "http://proxy.example:8080",
+        "username": "user",
+        "password": "pass",
+    }
+
+
+def test_browser_args_hide_crash_restore_bubble() -> None:
+    args = browser_args()
+
+    assert "--disable-session-crashed-bubble" in args
+    assert "--hide-crash-restore-bubble" in args
+
+
+def test_setup_browser_args_launch_manual_profile_window(tmp_path) -> None:
+    args = setup_browser_args(tmp_path / "profile", "https://chatgpt.com/")
+
+    assert "--disable-gpu" in args
+    assert f"--user-data-dir={tmp_path / 'profile'}" in args
+    assert "--disable-setuid-sandbox" in args
+    assert "--new-window" in args
+    assert "--no-first-run" in args
+    assert "--no-sandbox" in args
+    assert "--disable-software-rasterizer" in args
+    assert args[-1] == "https://chatgpt.com/"
+
+
+def test_normalize_profile_shutdown_state_marks_profile_clean(tmp_path) -> None:
+    preferences_path = tmp_path / "Default" / "Preferences"
+    local_state_path = tmp_path / "Local State"
+    preferences_path.parent.mkdir(parents=True)
+    preferences_path.write_text(
+        json.dumps({"exit_type": "Crashed", "exited_cleanly": False}),
+        encoding="utf-8",
+    )
+    local_state_path.write_text(
+        json.dumps({"exit_type": "Crashed", "exited_cleanly": False}),
+        encoding="utf-8",
+    )
+
+    normalize_profile_shutdown_state(tmp_path)
+
+    assert json.loads(preferences_path.read_text(encoding="utf-8")) == {
+        "exit_type": "Normal",
+        "exited_cleanly": True,
+    }
+    assert json.loads(local_state_path.read_text(encoding="utf-8")) == {
+        "exit_type": "Normal",
+        "exited_cleanly": True,
+    }
 
 
 class FakePage:
