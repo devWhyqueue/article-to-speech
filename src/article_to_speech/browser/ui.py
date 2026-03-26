@@ -6,30 +6,14 @@ from urllib.parse import urljoin
 from playwright.async_api import Error, Locator, Page
 
 from article_to_speech.core.browser_runtime import is_project_page_url
+from article_to_speech.browser.ui_audio import locate_read_aloud_button
 
-_AUDIO_LABEL_PATTERN = re.compile(r"read aloud|listen|play response|play audio|play message", re.I)
-_NON_AUDIO_LABEL_PATTERN = re.compile(
-    r"copy|share|thumb|regenerate|edit|good response|bad response|voice|dictat|record",
-    re.I,
-)
 _NEW_CHAT_SELECTORS = [
     "a[data-testid='create-new-chat-button']",
     "button[data-testid='create-new-chat-button']",
     "a[href$='/new']",
     "button[aria-label*='New chat']",
     "a[href='/']",
-]
-_AUDIO_BUTTON_SELECTORS = [
-    "button[data-testid*='audio']",
-    "[role='menuitem'][data-testid*='audio']",
-    "button[aria-label*='Read aloud']",
-    "button[aria-label*='Listen']",
-    "button[aria-label*='Play audio']",
-    "button[aria-label*='Play response']",
-    "[role='menuitem'][aria-label*='Read aloud']",
-    "[role='menuitem'][aria-label*='Listen']",
-    "[role='menuitem'][aria-label*='Play audio']",
-    "[role='menuitem'][aria-label*='Play response']",
 ]
 _UI_SETTLE_MS = 5_000
 
@@ -131,76 +115,6 @@ async def fill_editor(editor: Locator, value: str) -> None:
         """,
         value,
     )
-
-
-async def locate_read_aloud_button(turn: Locator, page: Page) -> Locator | None:
-    """Locate the read-aloud control for the latest assistant message."""
-    for _ in range(3):
-        for hover_target in (turn.locator("[data-message-author-role='assistant']").last, turn):
-            if await hover_target.count():
-                await hover_target.hover(timeout=10_000)
-                await page.wait_for_timeout(1_000)
-            menu_item = await _open_more_actions_and_find_read_aloud(turn, page)
-            if menu_item is not None:
-                return menu_item
-            button = await _matching_audio_button(turn)
-            if button is not None:
-                return button
-            page_button = await _matching_audio_button(page.locator("main"))
-            if page_button is not None:
-                return page_button
-            selector_button = await _matching_audio_selector(page)
-            if selector_button is not None:
-                return selector_button
-        await settle_chatgpt_ui(page)
-    return None
-
-
-async def _matching_audio_button(turn: Locator) -> Locator | None:
-    buttons = turn.locator("button, [role='button'], [role='menuitem']")
-    for index in range(await buttons.count()):
-        button = buttons.nth(index)
-        if not await button.is_visible():
-            continue
-        label_parts = [
-            await button.get_attribute("aria-label") or "",
-            await button.get_attribute("title") or "",
-            await button.get_attribute("data-testid") or "",
-            await button.inner_text(),
-        ]
-        label = " ".join(part.strip() for part in label_parts if part).strip()
-        if not label or _NON_AUDIO_LABEL_PATTERN.search(label):
-            continue
-        if _AUDIO_LABEL_PATTERN.search(label):
-            return button
-    return None
-
-
-async def _matching_audio_selector(page: Page) -> Locator | None:
-    for selector in _AUDIO_BUTTON_SELECTORS:
-        locator = page.locator(selector)
-        if await locator.count() and await locator.first.is_visible():
-            return locator.first
-    for role in ("button", "menuitem"):
-        locator = page.get_by_role(role, name=_AUDIO_LABEL_PATTERN)
-        if await locator.count() and await locator.first.is_visible():
-            return locator.first
-    return None
-
-
-async def _open_more_actions_and_find_read_aloud(turn: Locator, page: Page) -> Locator | None:
-    more_actions = turn.get_by_role("button", name=re.compile(r"more actions", re.I))
-    if not await more_actions.count():
-        more_actions = page.get_by_role("button", name=re.compile(r"more actions", re.I))
-    if not await more_actions.count():
-        return None
-    await more_actions.last.click(timeout=10_000)
-    await page.wait_for_timeout(1_500)
-    for role in ("menuitem", "button"):
-        read_aloud = page.get_by_role(role, name=re.compile(r"^read aloud$|^listen$", re.I))
-        if await read_aloud.count() and await read_aloud.first.is_visible():
-            return read_aloud.first
-    return await _matching_audio_selector(page)
 
 
 async def open_new_chat(page: Page) -> bool:

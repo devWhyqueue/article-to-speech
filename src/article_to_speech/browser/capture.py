@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
@@ -10,6 +12,76 @@ from playwright.async_api import Error, Page, Response
 
 from article_to_speech.core.models import BrowserStepLog
 
+_AUDIO_HOOK_SCRIPT = """
+(() => {
+  window.__atsAudioState = { sources: [], events: [] };
+  const remember = (entry) => {
+    try {
+      window.__atsAudioState.events.push({
+        src: entry?.src || "",
+        event: entry?.event || "",
+        currentTime: entry?.currentTime || 0,
+        paused: Boolean(entry?.paused),
+        ended: Boolean(entry?.ended),
+        timestamp: Date.now(),
+      });
+      if (window.__atsAudioState.events.length > 200) {
+        window.__atsAudioState.events = window.__atsAudioState.events.slice(-200);
+      }
+    } catch (error) {
+      console.warn("audio event hook failed", error);
+    }
+  };
+  const bindAudio = (audio) => {
+    if (!audio || audio.__atsBound) {
+      return;
+    }
+    audio.__atsBound = true;
+    for (const eventName of ["play", "playing", "pause", "ended", "loadedmetadata", "timeupdate"]) {
+      audio.addEventListener(eventName, () => {
+        remember({
+          src: audio.currentSrc || audio.src || "",
+          event: eventName,
+          currentTime: audio.currentTime || 0,
+          paused: audio.paused,
+          ended: audio.ended,
+        });
+      });
+    }
+  };
+  const scan = () => {
+    for (const audio of document.querySelectorAll("audio")) {
+      bindAudio(audio);
+    }
+  };
+  scan();
+  new MutationObserver(scan).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+  const originalPlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function(...args) {
+    try {
+      bindAudio(this);
+      window.__atsAudioState.sources.push({
+        src: this.currentSrc || this.src || "",
+        timestamp: Date.now(),
+      });
+      remember({
+        src: this.currentSrc || this.src || "",
+        event: "play-call",
+        currentTime: this.currentTime || 0,
+        paused: this.paused,
+        ended: this.ended,
+      });
+    } catch (error) {
+      console.warn("audio hook failed", error);
+    }
+    return originalPlay.apply(this, args);
+  };
+})();
+"""
+
 
 async def maybe_capture_response_bytes(
     response: Response,
@@ -17,9 +89,11 @@ async def maybe_capture_response_bytes(
 ) -> None:
     """Capture response bytes for audio-like network responses."""
     content_type = response.headers.get("content-type", "")
-    audio_like = content_type.startswith("audio/") or any(
+    audio_like = "/backend-api/synthesize?" in response.url.lower() or content_type.startswith(
+        "audio/"
+    ) or any(
         token in response.url.lower()
-        for token in ("audio", "voice", "readaloud", ".mp3", ".m4a", ".wav")
+        for token in ("audio", "voice", "readaloud", "synthesize", ".mp3", ".m4a", ".wav")
     )
     if not audio_like:
         return
@@ -29,6 +103,20 @@ async def maybe_capture_response_bytes(
         return
     if payload:
         payloads.append((response.url, content_type, payload))
+
+
+def response_listener(
+    response_payloads: list[tuple[str, str, bytes]],
+    capture_tasks: list[asyncio.Task[None]],
+) -> Callable[[Response], None]:
+    """Create a response hook that captures audio-like payloads asynchronously."""
+
+    def _listener(response: Response) -> None:
+        capture_tasks.append(
+            asyncio.create_task(maybe_capture_response_bytes(response, response_payloads))
+        )
+
+    return _listener
 
 
 async def write_diagnostics(
@@ -104,75 +192,7 @@ def extension_from_audio(url: str, content_type: str) -> str:
 
 def audio_hook_script() -> str:
     """Return the browser bootstrap script that tracks played audio sources."""
-    return """
-    (() => {
-      window.__atsAudioState = { sources: [], events: [] };
-      const remember = (entry) => {
-        try {
-          window.__atsAudioState.events.push({
-            src: entry?.src || "",
-            event: entry?.event || "",
-            currentTime: entry?.currentTime || 0,
-            paused: Boolean(entry?.paused),
-            ended: Boolean(entry?.ended),
-            timestamp: Date.now(),
-          });
-          if (window.__atsAudioState.events.length > 200) {
-            window.__atsAudioState.events = window.__atsAudioState.events.slice(-200);
-          }
-        } catch (error) {
-          console.warn("audio event hook failed", error);
-        }
-      };
-      const bindAudio = (audio) => {
-        if (!audio || audio.__atsBound) {
-          return;
-        }
-        audio.__atsBound = true;
-        for (const eventName of ["play", "playing", "pause", "ended", "loadedmetadata", "timeupdate"]) {
-          audio.addEventListener(eventName, () => {
-            remember({
-              src: audio.currentSrc || audio.src || "",
-              event: eventName,
-              currentTime: audio.currentTime || 0,
-              paused: audio.paused,
-              ended: audio.ended,
-            });
-          });
-        }
-      };
-      const scan = () => {
-        for (const audio of document.querySelectorAll("audio")) {
-          bindAudio(audio);
-        }
-      };
-      scan();
-      new MutationObserver(scan).observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-      });
-      const originalPlay = HTMLMediaElement.prototype.play;
-      HTMLMediaElement.prototype.play = function(...args) {
-        try {
-          bindAudio(this);
-          window.__atsAudioState.sources.push({
-            src: this.currentSrc || this.src || "",
-            timestamp: Date.now(),
-          });
-          remember({
-            src: this.currentSrc || this.src || "",
-            event: "play-call",
-            currentTime: this.currentTime || 0,
-            paused: this.paused,
-            ended: this.ended,
-          });
-        } catch (error) {
-          console.warn("audio hook failed", error);
-        }
-        return originalPlay.apply(this, args);
-      };
-    })();
-    """
+    return _AUDIO_HOOK_SCRIPT
 
 
 def artifact_dir(root: Path, title: str, source_url: str | None = None) -> Path:

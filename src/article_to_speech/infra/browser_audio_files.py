@@ -1,53 +1,44 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
-from playwright.async_api import Error, Page
+from playwright.async_api import Page
 
-from article_to_speech.infra.audio import write_audio_bytes, write_base64_audio
-from article_to_speech.infra.browser_audio_runtime import _record_played_audio_blob
+from article_to_speech.browser.capture import extension_from_audio
+from article_to_speech.infra.audio import write_audio_bytes
 
 
-def _audio_output_path(
+def _write_network_payloads(
     chunk_dir: Path,
-    audio_source: dict[str, str],
-    stem: str = "chatgpt-audio",
-) -> Path:
-    if audio_source["format"] == "mp3":
-        extension = ".mp3"
-    elif audio_source["format"] == "m4a":
-        extension = ".m4a"
-    else:
-        extension = ".webm"
-    return chunk_dir / f"{stem}{extension}"
-
-
-async def _download_audio_sources(
-    page: Page, chunk_dir: Path, sources: list[dict[str, str]]
+    response_payloads: list[tuple[str, str, bytes]],
 ) -> list[Path]:
     paths: list[Path] = []
-    seen_urls: set[str] = set()
-    for index, source in enumerate(sources, start=1):
-        url = source["url"]
-        if url in seen_urls:
-            continue
-        seen_urls.add(url)
-        stem = "chatgpt-audio" if len(sources) == 1 else f"chatgpt-audio-{index:02d}"
-        output_path = _audio_output_path(chunk_dir, source, stem)
-        if url.startswith("blob:"):
-            payload = await _record_played_audio_blob(page)
-            if isinstance(payload, str) and payload:
-                paths.append(write_base64_audio(output_path, payload, "browser_blob").path)
-            continue
-        try:
-            response = await page.context.request.get(url)
-        except Error:
-            continue
-        if not response.ok:
-            continue
-        payload = await response.body()
+    seen_payloads: set[str] = set()
+    for index, (url, content_type, payload) in enumerate(response_payloads, start=1):
         if not payload:
             continue
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest in seen_payloads:
+            continue
+        seen_payloads.add(digest)
+        stem = "network-audio" if len(response_payloads) == 1 else f"network-audio-{index:02d}"
+        output_path = chunk_dir / f"{stem}{extension_from_audio(url, content_type)}"
         write_audio_bytes(output_path, payload)
         paths.append(output_path)
     return paths
+
+
+async def _wait_for_audio_response_payload(
+    page: Page,
+    response_payloads: list[tuple[str, str, bytes]],
+    *,
+    timeout_ms: int = 30_000,
+) -> None:
+    waited_ms = 0
+    while waited_ms < timeout_ms:
+        if response_payloads:
+            return
+        await page.wait_for_timeout(500)
+        waited_ms += 500
+    raise TimeoutError("Timed out waiting for the ChatGPT synthesize response.")

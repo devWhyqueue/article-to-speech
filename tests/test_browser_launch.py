@@ -11,8 +11,8 @@ from article_to_speech.browser.launch import (
     browser_args,
     build_browser_context_options,
     normalize_profile_shutdown_state,
-    setup_browser_args,
 )
+from article_to_speech.core.browser_runtime import setup_browser_args
 from article_to_speech.browser.ui import is_project_page_url
 from article_to_speech.core.config import Settings
 

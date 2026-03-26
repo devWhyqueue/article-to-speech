@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from article_to_speech.infra.archive_proxy import (
@@ -7,10 +9,12 @@ from article_to_speech.infra.archive_proxy import (
     archive_proxy_reaches_archive,
     dedupe_proxy_urls,
     filter_reachable_archive_proxy_urls,
+    load_cached_archive_proxy_urls,
     parse_proxy_list,
     parse_proxy_settings,
     redact_proxy_url,
     resolve_archive_proxy_urls,
+    write_cached_archive_proxy_urls,
 )
 from article_to_speech.browser.fetcher import (
     archive_lookup_urls,
@@ -127,6 +131,24 @@ def test_redact_proxy_url_hides_credentials() -> None:
     assert redact_proxy_url("http://user:pass@proxy.example:8080") == "http://proxy.example:8080"
 
 
+def test_archive_proxy_cache_round_trip(tmp_path: Path) -> None:
+    cache_path = tmp_path / "archive-proxies.txt"
+
+    write_cached_archive_proxy_urls(
+        cache_path,
+        (
+            "http://user1:pass1@proxy1:1111",
+            "http://user1:pass1@proxy1:1111",
+            "http://user2:pass2@proxy2:2222",
+        ),
+    )
+
+    assert load_cached_archive_proxy_urls(cache_path) == (
+        "http://user1:pass1@proxy1:1111",
+        "http://user2:pass2@proxy2:2222",
+    )
+
+
 @pytest.mark.asyncio
 async def test_filter_reachable_archive_proxy_urls_keep_working_proxies(monkeypatch) -> None:
     async def fake_probe(proxy_url: str, *, user_agent: str) -> bool:
@@ -147,13 +169,11 @@ async def test_filter_reachable_archive_proxy_urls_keep_working_proxies(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_resolve_archive_proxy_urls_include_downloaded_working_proxies(monkeypatch) -> None:
+async def test_resolve_archive_proxy_urls_uses_working_configured_proxies_before_remote_list(
+    monkeypatch,
+) -> None:
     async def fake_download(proxy_list_url: str) -> tuple[str, ...]:
-        assert proxy_list_url == "https://proxy.example/list.txt"
-        return (
-            "http://user1:pass1@proxy1:1111",
-            "http://user2:pass2@proxy2:2222",
-        )
+        raise AssertionError(f"download should not run for {proxy_list_url}")
 
     async def fake_filter(
         proxy_urls: tuple[str, ...],
@@ -176,10 +196,90 @@ async def test_resolve_archive_proxy_urls_include_downloaded_working_proxies(mon
         configured_urls=("http://user0:pass0@proxy0:0000",),
         proxy_list_url="https://proxy.example/list.txt",
         user_agent="test-agent",
-    ) == (
-        "http://user0:pass0@proxy0:0000",
-        "http://user1:pass1@proxy1:1111",
+        cache_path=None,
+    ) == ("http://user0:pass0@proxy0:0000",)
+
+
+@pytest.mark.asyncio
+async def test_resolve_archive_proxy_urls_uses_cache_before_downloading(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "archive-proxies.txt"
+    write_cached_archive_proxy_urls(cache_path, ("http://user1:pass1@cached:1111",))
+
+    async def fake_filter(
+        proxy_urls: tuple[str, ...],
+        *,
+        user_agent: str,
+    ) -> tuple[str, ...]:
+        assert user_agent == "test-agent"
+        assert proxy_urls == ("http://user1:pass1@cached:1111",)
+        return proxy_urls
+
+    async def fake_download(proxy_list_url: str) -> tuple[str, ...]:
+        raise AssertionError(f"download should not run for {proxy_list_url}")
+
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.filter_reachable_archive_proxy_urls",
+        fake_filter,
     )
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.download_archive_proxy_urls",
+        fake_download,
+    )
+
+    assert await resolve_archive_proxy_urls(
+        configured_urls=(),
+        proxy_list_url="https://proxy.example/list.txt",
+        user_agent="test-agent",
+        cache_path=cache_path,
+    ) == ("http://user1:pass1@cached:1111",)
+
+
+@pytest.mark.asyncio
+async def test_resolve_archive_proxy_urls_refreshes_remote_list_when_cache_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "archive-proxies.txt"
+    write_cached_archive_proxy_urls(cache_path, ("http://user1:pass1@cached:1111",))
+    filter_calls: list[tuple[str, ...]] = []
+
+    async def fake_filter(
+        proxy_urls: tuple[str, ...],
+        *,
+        user_agent: str,
+    ) -> tuple[str, ...]:
+        filter_calls.append(proxy_urls)
+        if proxy_urls == ("http://user1:pass1@cached:1111",):
+            return ()
+        return ("http://user2:pass2@fresh:2222",)
+
+    async def fake_download(proxy_list_url: str) -> tuple[str, ...]:
+        assert proxy_list_url == "https://proxy.example/list.txt"
+        return ("http://user2:pass2@fresh:2222",)
+
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.filter_reachable_archive_proxy_urls",
+        fake_filter,
+    )
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.download_archive_proxy_urls",
+        fake_download,
+    )
+
+    assert await resolve_archive_proxy_urls(
+        configured_urls=(),
+        proxy_list_url="https://proxy.example/list.txt",
+        user_agent="test-agent",
+        cache_path=cache_path,
+    ) == ("http://user2:pass2@fresh:2222",)
+    assert filter_calls == [
+        ("http://user1:pass1@cached:1111",),
+        ("http://user2:pass2@fresh:2222",),
+    ]
+    assert load_cached_archive_proxy_urls(cache_path) == ("http://user2:pass2@fresh:2222",)
 
 
 @pytest.mark.asyncio

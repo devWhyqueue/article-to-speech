@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import NotRequired, TypedDict
 from urllib.parse import urlsplit
 
@@ -41,15 +42,33 @@ async def resolve_archive_proxy_urls(
     configured_urls: tuple[str, ...],
     proxy_list_url: str | None,
     user_agent: str,
+    cache_path: Path | None = None,
 ) -> tuple[str, ...]:
     """Return reachable archive proxies from static config and an optional remote list."""
-    candidate_urls = configured_urls
-    if proxy_list_url is not None:
-        downloaded_urls = await download_archive_proxy_urls(proxy_list_url)
-        candidate_urls = dedupe_proxy_urls((*configured_urls, *downloaded_urls))
-    if not candidate_urls:
+    cached_urls = load_cached_archive_proxy_urls(cache_path)
+    candidate_urls = dedupe_proxy_urls((*cached_urls, *configured_urls))
+    if candidate_urls:
+        working_urls = await filter_reachable_archive_proxy_urls(
+            candidate_urls,
+            user_agent=user_agent,
+        )
+        if working_urls:
+            write_cached_archive_proxy_urls(cache_path, working_urls)
+            return working_urls
+    if proxy_list_url is None:
+        write_cached_archive_proxy_urls(cache_path, ())
         return ()
-    return await filter_reachable_archive_proxy_urls(candidate_urls, user_agent=user_agent)
+    downloaded_urls = await download_archive_proxy_urls(proxy_list_url)
+    refreshed_candidates = dedupe_proxy_urls((*configured_urls, *downloaded_urls))
+    if not refreshed_candidates:
+        write_cached_archive_proxy_urls(cache_path, ())
+        return ()
+    working_urls = await filter_reachable_archive_proxy_urls(
+        refreshed_candidates,
+        user_agent=user_agent,
+    )
+    write_cached_archive_proxy_urls(cache_path, working_urls)
+    return working_urls
 
 
 async def download_archive_proxy_urls(proxy_list_url: str) -> tuple[str, ...]:
@@ -132,3 +151,27 @@ def redact_proxy_url(proxy_url: str) -> str:
     if not parsed.hostname or parsed.port is None:
         return proxy_url
     return f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+
+
+def load_cached_archive_proxy_urls(cache_path: Path | None) -> tuple[str, ...]:
+    """Load cached archive proxy URLs from disk."""
+    if cache_path is None or not cache_path.exists():
+        return ()
+    return dedupe_proxy_urls(
+        tuple(
+            line.strip()
+            for line in cache_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    )
+
+
+def write_cached_archive_proxy_urls(
+    cache_path: Path | None,
+    proxy_urls: tuple[str, ...],
+) -> None:
+    """Persist the current set of working archive proxy URLs."""
+    if cache_path is None:
+        return
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("\n".join(proxy_urls), encoding="utf-8")

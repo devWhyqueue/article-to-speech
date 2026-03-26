@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
+import logging
 import mimetypes
+import os
+import signal
 import subprocess
+from contextlib import suppress
 from pathlib import Path
 
+from article_to_speech.browser.launch import (
+    clear_shared_browser_debug_port,
+    write_shared_browser_debug_port,
+)
+from article_to_speech.core.browser_runtime import (
+    browser_process_env,
+    free_local_port,
+    setup_browser_args,
+)
 from article_to_speech.core.models import AudioArtifact
+
+LOGGER = logging.getLogger(__name__)
 
 
 def write_audio_bytes(output_path: Path, payload: bytes) -> AudioArtifact:
@@ -73,3 +89,43 @@ def _run_ffmpeg(*, input_args: list[str], output_path: Path, codec_args: list[st
         capture_output=True,
         text=True,
     )
+
+
+async def run_manual_setup_browser(executable_path: Path, profile_dir: Path) -> None:
+    """Launch a manual ChatGPT browser window attached to the shared profile."""
+    debug_port = free_local_port()
+    command = [
+        os.fspath(executable_path),
+        *setup_browser_args(profile_dir, "https://chatgpt.com/"),
+        f"--remote-debugging-port={debug_port}",
+    ]
+    write_shared_browser_debug_port(profile_dir, debug_port)
+    LOGGER.info(
+        "setup_browser_ready",
+        extra={
+            "context": {
+                "novnc_url": "http://localhost:6080/vnc.html",
+                "profile_dir": str(profile_dir),
+            }
+        },
+    )
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        env=browser_process_env(),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        await process.wait()
+    except asyncio.CancelledError:
+        process.terminate()
+        with suppress(ProcessLookupError):
+            await asyncio.wait_for(process.wait(), timeout=10)
+        raise
+    finally:
+        clear_shared_browser_debug_port(profile_dir)
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.send_signal(signal.SIGTERM)
+            with suppress(asyncio.TimeoutError, ProcessLookupError):
+                await asyncio.wait_for(process.wait(), timeout=10)

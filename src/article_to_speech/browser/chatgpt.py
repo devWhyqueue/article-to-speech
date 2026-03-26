@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import signal
-from contextlib import suppress
 from pathlib import Path
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Download, Page, async_playwright
 
-from article_to_speech.browser.capture import artifact_dir, audio_hook_script, write_diagnostics
+from article_to_speech.browser.capture import (
+    artifact_dir,
+    audio_hook_script,
+    response_listener,
+    write_diagnostics,
+)
 from article_to_speech.browser.launch import (
     browser_stealth_script,
-    clear_shared_browser_debug_port,
     hold_browser_profile,
     open_chatgpt_context,
-    setup_browser_args,
-    write_shared_browser_debug_port,
 )
 from article_to_speech.browser.support import (
     capture_audio_chunk,
@@ -38,9 +37,7 @@ from article_to_speech.browser.ui import (
     wait_for_editor,
 )
 from article_to_speech.core.browser_runtime import (
-    browser_process_env,
     ensure_reusable_workspace_page,
-    free_local_port,
     get_or_create_page,
     is_project_page_url,
     wait_for_project_workspace_ready,
@@ -53,7 +50,7 @@ from article_to_speech.core.models import (
     NarrationRequest,
     ResolvedArticle,
 )
-from article_to_speech.infra.audio import convert_to_mp3
+from article_to_speech.infra.audio import convert_to_mp3, run_manual_setup_browser
 
 LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +63,7 @@ class ChatGPTBrowserAutomation:
         with hold_browser_profile(self._settings.browser_profile_dir):
             async with async_playwright() as playwright:
                 executable_path = Path(playwright.chromium.executable_path)
-            await self._run_manual_setup_browser(executable_path)
+            await run_manual_setup_browser(executable_path, self._settings.browser_profile_dir)
 
     async def synthesize_article(
         self,
@@ -83,6 +80,11 @@ class ChatGPTBrowserAutomation:
                 page = await get_or_create_page(context)
                 await page.add_init_script(audio_hook_script())
                 await page.add_init_script(browser_stealth_script())
+                downloads: list[Download] = []
+                response_payloads: list[tuple[str, str, bytes]] = []
+                capture_tasks: list[asyncio.Task[None]] = []
+                context.on("response", response_listener(response_payloads, capture_tasks))
+                page.on("download", lambda download: downloads.append(download))
 
                 try:
                     await self._open_chatgpt(page, step_logs)
@@ -90,6 +92,8 @@ class ChatGPTBrowserAutomation:
                         await self._send_prompt(page, request, step_logs)
                         raw_paths = await capture_audio_chunk(
                             page=page,
+                            downloads=downloads,
+                            response_payloads=response_payloads,
                             diagnostics_dir=diagnostics_dir,
                             chunk_index=request.chunk_index,
                         )
@@ -100,7 +104,6 @@ class ChatGPTBrowserAutomation:
                             mp3_path = raw_path.with_suffix(".mp3")
                             convert_to_mp3(raw_path, mp3_path)
                             chunk_outputs.append(mp3_path)
-
                     return final_artifact(
                         article.title,
                         self._settings.artifacts_dir,
@@ -113,6 +116,11 @@ class ChatGPTBrowserAutomation:
                 except Exception as error:  # noqa: BLE001
                     await write_diagnostics(page, diagnostics_dir, step_logs)
                     raise BrowserAutomationError(str(error)) from error
+                finally:
+                    for task in capture_tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*capture_tasks, return_exceptions=True)
 
     async def _open_chatgpt(self, page: Page, step_logs: list[BrowserStepLog]) -> None:
         step_logs.append(BrowserStepLog(step="open_home", detail="Navigating to ChatGPT"))
@@ -203,41 +211,3 @@ class ChatGPTBrowserAutomation:
                 return True
             await page.wait_for_timeout(1_000)
         return False
-
-    async def _run_manual_setup_browser(self, executable_path: Path) -> None:
-        debug_port = free_local_port()
-        command = [
-            os.fspath(executable_path),
-            *setup_browser_args(self._settings.browser_profile_dir, "https://chatgpt.com/"),
-            f"--remote-debugging-port={debug_port}",
-        ]
-        write_shared_browser_debug_port(self._settings.browser_profile_dir, debug_port)
-        LOGGER.info(
-            "setup_browser_ready",
-            extra={
-                "context": {
-                    "novnc_url": "http://localhost:6080/vnc.html",
-                    "profile_dir": str(self._settings.browser_profile_dir),
-                }
-            },
-        )
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            env=browser_process_env(),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            await process.wait()
-        except asyncio.CancelledError:
-            process.terminate()
-            with suppress(ProcessLookupError):
-                await asyncio.wait_for(process.wait(), timeout=10)
-            raise
-        finally:
-            clear_shared_browser_debug_port(self._settings.browser_profile_dir)
-            if process.returncode is None:
-                with suppress(ProcessLookupError):
-                    process.send_signal(signal.SIGTERM)
-                with suppress(asyncio.TimeoutError, ProcessLookupError):
-                    await asyncio.wait_for(process.wait(), timeout=10)

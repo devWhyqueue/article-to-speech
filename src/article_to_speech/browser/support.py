@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 
-from playwright.async_api import BrowserContext, Page
+from playwright.async_api import BrowserContext, Download, Page
 
 from article_to_speech.browser.capture import (
     artifact_dir,
@@ -17,8 +17,10 @@ from article_to_speech.browser.ui import locate_read_aloud_button
 from article_to_speech.core.exceptions import AuthenticationRequiredError, BrowserAutomationError
 from article_to_speech.core.models import AudioArtifact, BrowserStepLog
 from article_to_speech.infra.audio import concat_mp3_files
-from article_to_speech.infra.browser_audio_files import _download_audio_sources
-from article_to_speech.infra.browser_audio_runtime import _extract_audio_sources_from_page
+from article_to_speech.infra.browser_audio_files import (
+    _wait_for_audio_response_payload,
+    _write_network_payloads,
+)
 
 LOGIN_TEXT_PATTERN = re.compile(
     r"\b(log in|sign up|continue with google|continue with apple)\b",
@@ -27,7 +29,6 @@ LOGIN_TEXT_PATTERN = re.compile(
 LOGGER = logging.getLogger(__name__)
 _CLOUDFLARE_COOKIE_NAMES = ("cf_clearance", "__cf_bm", "__cflb")
 _UI_SETTLE_MS = 5_000
-_AUDIO_SOURCE_RETRIES = 60
 
 
 async def clear_chatgpt_challenge_cookies(context: BrowserContext) -> None:
@@ -135,37 +136,38 @@ def final_artifact(
 async def capture_audio_chunk(
     *,
     page: Page,
+    downloads: list[Download],
+    response_payloads: list[tuple[str, str, bytes]],
     diagnostics_dir: Path,
     chunk_index: int,
 ) -> list[Path]:
     """Capture one narrated audio chunk from the active assistant response."""
+    downloads.clear()
+    response_payloads.clear()
     chunk_dir = diagnostics_dir / f"chunk-{chunk_index:02d}"
     chunk_dir.mkdir(parents=True, exist_ok=True)
     await page.wait_for_timeout(_UI_SETTLE_MS)
     assistant_turn = page.locator("section[data-turn='assistant']").last
-    await assistant_turn.hover(timeout=10_000)
     read_aloud_button = await locate_read_aloud_button(assistant_turn, page)
     if read_aloud_button is None:
         raise BrowserAutomationError("Could not find the ChatGPT read-aloud control.")
     LOGGER.info("chatgpt_audio_control_found")
     await read_aloud_button.click(timeout=10_000)
-    await page.wait_for_timeout(_UI_SETTLE_MS)
     LOGGER.info("chatgpt_audio_capture_wait_start")
-    sources = await _extract_audio_sources_from_page(page, retries=_AUDIO_SOURCE_RETRIES)
-    if not sources:
-        raise BrowserAutomationError(
-            "ChatGPT started playback but exposed no downloadable audio source."
-        )
+    await _wait_for_audio_response_payload(page, response_payloads)
     LOGGER.info(
         "chatgpt_audio_capture_wait_done",
-        extra={"context": {"audio_sources": len(sources)}},
+        extra={
+            "context": {
+                "downloads": len(downloads),
+                "response_payloads": len(response_payloads),
+            }
+        },
     )
-    paths = await _download_audio_sources(page, chunk_dir, sources)
-    if paths:
-        return paths
-    raise BrowserAutomationError(
-        "ChatGPT exposed audio sources, but downloading the played audio failed."
-    )
+    network_paths = _write_network_payloads(chunk_dir, response_payloads)
+    if network_paths:
+        return network_paths
+    raise BrowserAutomationError("Failed to capture the ChatGPT synthesize response.")
 
 
 async def monitor_setup_challenge(page: Page, diagnostics_dir: Path) -> None:

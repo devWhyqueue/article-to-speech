@@ -68,6 +68,7 @@ class BrowserPageFetcher:
             configured_urls=self._settings.archive_proxy_urls,
             proxy_list_url=self._settings.archive_proxy_list_url,
             user_agent=self._settings.http_user_agent,
+            cache_path=self._settings.state_db_path.parent / "archive-proxies.txt",
         )
         self._archive_proxy_urls_cache = proxy_urls
         return proxy_urls
