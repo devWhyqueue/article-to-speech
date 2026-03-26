@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from playwright.async_api import Page, Response
+from typing import cast
 
 from article_to_speech.browser.capture import artifact_file_name, maybe_capture_response_bytes
 from article_to_speech.browser.support import final_artifact
@@ -66,7 +68,7 @@ async def test_maybe_capture_response_bytes_accepts_chatgpt_synthesize_url() -> 
         b"aac-payload",
     )
 
-    await maybe_capture_response_bytes(response, payloads)
+    await maybe_capture_response_bytes(response=cast(Response, response), payloads=payloads)
 
     assert payloads == [
         (
@@ -94,7 +96,9 @@ async def test_wait_for_audio_response_payload_returns_when_payload_appears() ->
 
     page.wait_for_timeout = instrumented_wait  # type: ignore[method-assign]
 
-    await _wait_for_audio_response_payload(page, response_payloads, timeout_ms=5_000)
+    await _wait_for_audio_response_payload(
+        cast(Page, page), response_payloads, timeout_ms=5_000
+    )
 
     assert page.wait_calls == [500, 500]
 
@@ -103,7 +107,7 @@ async def test_wait_for_audio_response_payload_times_out_without_payload() -> No
     page = WaitingPage()
 
     with pytest.raises(TimeoutError, match="Timed out waiting for the ChatGPT synthesize response."):
-        await _wait_for_audio_response_payload(page, [], timeout_ms=1_500)
+        await _wait_for_audio_response_payload(cast(Page, page), [], timeout_ms=1_500)
 
     assert page.wait_calls == [500, 500, 500]
 

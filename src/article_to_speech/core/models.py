@@ -37,6 +37,7 @@ class ResolvedArticle:
     original_url: str
     final_url: str
     title: str
+    subtitle: str | None
     source: str | None
     author: str | None
     published_at: str | None

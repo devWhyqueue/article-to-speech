@@ -3,12 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-import httpx
+import pytest
 
 from article_to_speech.article.extractor import ArticleExtractor
 from article_to_speech.article.resolver import ArticleResolver
 from article_to_speech.browser.fetcher import BrowserPageFetcher, RenderedPage
 from article_to_speech.core.config import Settings
+from article_to_speech.core.exceptions import ArticleResolutionError
 from article_to_speech.core.models import ResolvedArticle
 
 
@@ -21,42 +22,26 @@ class StubExtractor:
             original_url=url,
             final_url=final_url,
             title="Example",
-            source=None,
-            author=None,
-            published_at=None,
-            body_text="full article body",
-            paywalled="paywalled" in html,
-            trace=("stub",),
+            subtitle="Subtitle",
+            source="DIE ZEIT",
+            author="Reporter",
+            published_at="2026-03-26",
+            body_text="Paragraph one.",
+            trace=("zeit",),
         )
 
     def is_incomplete(self, article: ResolvedArticle) -> bool:
-        return article.paywalled
+        return False
 
 
 class StubBrowserFetcher:
-    def __init__(self, browser_html: str = "browser teaser") -> None:
+    def __init__(self, browser_html: str = "article body") -> None:
         self.browser_html = browser_html
         self.rendered_urls: list[str] = []
 
     async def render_archive_html(self, url: str) -> RenderedPage:
         self.rendered_urls.append(url)
         return RenderedPage(html=self.browser_html, final_url="https://archive.is/example")
-
-
-class StubClient:
-    def __init__(self, responses: dict[str, httpx.Response]) -> None:
-        self._responses = responses
-        self.requested_urls: list[str] = []
-
-    async def get(self, url: str) -> httpx.Response:
-        self.requested_urls.append(url)
-        response = self._responses[url]
-        if response.is_error:
-            raise httpx.HTTPStatusError("status error", request=response.request, response=response)
-        return response
-
-    async def aclose(self) -> None:
-        return None
 
 
 def _settings() -> Settings:
@@ -81,69 +66,37 @@ def _settings() -> Settings:
     )
 
 
-def _response(url: str, status_code: int, body: str) -> httpx.Response:
-    request = httpx.Request("GET", url)
-    return httpx.Response(status_code, text=body, request=request)
-
-
-async def test_resolve_uses_archive_render_when_direct_extraction_is_incomplete() -> None:
+async def test_resolve_uses_archive_render_for_supported_source() -> None:
     resolver = ArticleResolver(_settings())
-    browser_fetcher = StubBrowserFetcher("full article from browser")
-    client = StubClient(
-        {
-            "https://example.com/story": _response(
-                "https://example.com/story",
-                200,
-                "paywalled full article",
-            ),
-        }
-    )
+    browser_fetcher = StubBrowserFetcher()
     resolver._extractor = cast(ArticleExtractor, StubExtractor())
     resolver._browser_fetcher = cast(BrowserPageFetcher, browser_fetcher)
-    resolver._client = cast(httpx.AsyncClient, client)
 
-    article = await resolver.resolve("https://example.com/story")
-
-    assert article.trace == ("stub", "archive_render")
-    assert client.requested_urls == ["https://example.com/story"]
-    assert browser_fetcher.rendered_urls == ["https://example.com/story"]
-
-
-async def test_resolve_accepts_direct_article_when_not_paywalled() -> None:
-    resolver = ArticleResolver(_settings())
-    browser_fetcher = StubBrowserFetcher("unused browser article")
-    client = StubClient(
-        {
-            "https://example.com/story": _response("https://example.com/story", 200, "full article"),
-        }
+    article = await resolver.resolve(
+        "https://www.zeit.de/2026/14/karin-prien-bundesfrauenministerin-gewalthilfegesetz-digitale-gewalt"
     )
-    resolver._extractor = cast(ArticleExtractor, StubExtractor())
-    resolver._browser_fetcher = cast(BrowserPageFetcher, browser_fetcher)
-    resolver._client = cast(httpx.AsyncClient, client)
 
-    article = await resolver.resolve("https://example.com/story")
-
-    assert article.trace == ("stub", "direct")
-    assert browser_fetcher.rendered_urls == []
+    assert article.trace == ("zeit", "archive_render")
+    assert browser_fetcher.rendered_urls == [
+        "https://www.zeit.de/2026/14/karin-prien-bundesfrauenministerin-gewalthilfegesetz-digitale-gewalt"
+    ]
 
 
-async def test_resolve_falls_back_to_archive_render_after_direct_http_error() -> None:
+async def test_resolve_rejects_unsupported_source() -> None:
     resolver = ArticleResolver(_settings())
-    browser_fetcher = StubBrowserFetcher(browser_html="full article from browser")
-    client = StubClient(
-        {
-            "https://example.com/story": _response(
-                "https://example.com/story",
-                429,
-                "rate limited",
-            ),
-        }
-    )
-    resolver._extractor = cast(ArticleExtractor, StubExtractor())
-    resolver._browser_fetcher = cast(BrowserPageFetcher, browser_fetcher)
-    resolver._client = cast(httpx.AsyncClient, client)
 
-    article = await resolver.resolve("https://example.com/story")
+    with pytest.raises(ArticleResolutionError, match="Unsupported article source"):
+        await resolver.resolve("https://example.com/story")
 
-    assert article.trace == ("stub", "archive_render")
-    assert browser_fetcher.rendered_urls == ["https://example.com/story"]
+
+async def test_resolve_surfaces_archive_render_errors() -> None:
+    resolver = ArticleResolver(_settings())
+
+    class FailingBrowserFetcher:
+        async def render_archive_html(self, url: str) -> RenderedPage:
+            raise RuntimeError("Archive lookup returned no results")
+
+    resolver._browser_fetcher = cast(BrowserPageFetcher, FailingBrowserFetcher())
+
+    with pytest.raises(ArticleResolutionError, match="Archive lookup returned no results"):
+        await resolver.resolve("https://www.faz.net/aktuell/politik/example.html")

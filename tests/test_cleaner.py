@@ -9,16 +9,19 @@ def test_cleaner_preserves_article_text_in_single_request() -> None:
         original_url="https://example.com/article",
         final_url="https://example.com/article",
         title="Example",
+        subtitle="Subtitle",
         source="Example Source",
         author="Reporter",
         published_at="2026-03-24",
-        body_text=("Paragraph one.\n\n" + ("Paragraph two. " * 40)),
+        body_text=("## Section\n\nParagraph one.\n\n" + ("Paragraph two. " * 40)),
     )
     requests = formatter.build_requests(article)
     assert len(requests) == 1
-    assert "rough webpage text" in requests[0].prompt_text
-    assert "Preserve original wording but remove obvious noise." in requests[0].prompt_text
+    assert "do not read markdown punctuation literally" in requests[0].prompt_text
     assert "<text>" in requests[0].prompt_text
+    assert "Example" in requests[0].prompt_text
+    assert "Subtitle" in requests[0].prompt_text
+    assert "Section" in requests[0].prompt_text
     assert "Paragraph one." in requests[0].prompt_text
     assert "Paragraph two." in requests[0].prompt_text
 
@@ -30,6 +33,7 @@ def test_cleaner_drops_boilerplate_lines() -> None:
         original_url="https://example.com/article",
         final_url="https://example.com/article",
         title="Example",
+        subtitle=None,
         source=None,
         author=None,
         published_at=None,
@@ -48,6 +52,7 @@ def test_cleaner_trims_leading_site_chrome_labels() -> None:
         original_url="https://example.com/article",
         final_url="https://example.com/article",
         title="Example",
+        subtitle=None,
         source=None,
         author=None,
         published_at=None,
@@ -65,6 +70,5 @@ def test_cleaner_trims_leading_site_chrome_labels() -> None:
 
     assert "Tracking ICE Activity" not in cleaned
     assert "Share full article" not in cleaned
-    assert cleaned.startswith(
-        "Costa Rica said it had agreed to take up to 25 deportees a week from the United States."
-    )
+    assert cleaned.startswith("Example\n\n")
+    assert "Costa Rica said it had agreed to take up to 25 deportees a week from the United States." in cleaned
