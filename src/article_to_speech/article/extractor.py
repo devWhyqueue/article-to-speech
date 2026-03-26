@@ -17,6 +17,7 @@ from article_to_speech.article.extractor_support import (
     _extract_document_headline,
     _normalize_text,
     _preferred_source,
+    has_paywall_signals,
     sanitize_html,
     trim_extracted_body,
 )
@@ -29,6 +30,8 @@ PAYWALL_MARKERS = (
     "jetzt weiterlesen",
     "for subscribers",
     "continue reading with trial",
+    "abopflichtiger inhalt",
+    "zeit+",
 )
 
 
@@ -49,13 +52,24 @@ class ArticleExtractor:
         best = _best_attempt(soup, sanitized_html, final_url)
         if best is None:
             return None
-        return _build_resolved_article(url, final_url, metadata, article_root, headline, best, soup)
+        return _build_resolved_article(
+            url,
+            final_url,
+            metadata,
+            article_root,
+            headline,
+            best,
+            soup,
+            paywalled=has_paywall_signals(soup, sanitized_html, final_url),
+        )
 
     def is_incomplete(self, article: ResolvedArticle) -> bool:
         """Return whether the extracted article still looks like a teaser or paywall stub."""
         lowered = article.body_text.lower()
-        return not _looks_complete(article.body_text) or any(
-            marker in lowered for marker in PAYWALL_MARKERS
+        return (
+            article.paywalled
+            or not _looks_complete(article.body_text)
+            or any(marker in lowered for marker in PAYWALL_MARKERS)
         )
 
 
@@ -209,6 +223,8 @@ def _build_resolved_article(
     headline: str | None,
     best: ExtractionAttempt,
     soup: BeautifulSoup,
+    *,
+    paywalled: bool,
 ) -> ResolvedArticle:
     metadata_title = headline or metadata["title"]
     title = metadata_title or _guess_title_from_body(best.body_text) or final_url
@@ -221,5 +237,6 @@ def _build_resolved_article(
         author=metadata["author"] or _extract_body_author(article_root),
         published_at=metadata["published_at"] or _extract_body_published(article_root),
         body_text=trim_extracted_body(best.body_text, metadata_title),
+        paywalled=paywalled,
         trace=(best.source_name,),
     )

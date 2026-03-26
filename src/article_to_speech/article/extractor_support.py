@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -228,3 +229,19 @@ def _looks_like_archive_replay_body_block(text: str) -> bool:
     if any(marker in lowered for marker in ARCHIVE_REPLAY_NOISE_MARKERS):
         return False
     return any(punctuation in text for punctuation in (".", "?", "!", ";", ":"))
+
+
+def has_paywall_signals(soup: BeautifulSoup, html: str, final_url: str) -> bool:
+    """Return whether the current non-archive document explicitly signals a paywall."""
+    if urlparse(final_url).netloc.lower() in {"archive.is", "archive.today", "archive.ph"}:
+        return False
+    if soup.select_one("html[data-is-truncated-by-paywall], #paywall, [data-paywall]") is not None:
+        return True
+    lowered_html = html.lower()
+    if any(marker in lowered_html for marker in ("abopflichtiger inhalt", "zeit+", "z+")):
+        return True
+    for block in soup.find_all("script"):
+        text = block.string or block.text
+        if text and re.search(r'"isAccessibleForFree"\s*:\s*"?(false|0)"?', text, re.IGNORECASE):
+            return True
+    return False

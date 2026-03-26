@@ -67,6 +67,22 @@ docker compose up --build setup-browser
 
 Then open [http://localhost:6080/vnc.html](http://localhost:6080/vnc.html), complete ChatGPT login and any 2FA, and leave `.runtime/` in place for normal runs. This path is mainly for debugging because Cloudflare is more likely to challenge the Docker browser desktop than the local WSLg bootstrap.
 
+If `setup-browser` is running on a remote server, prefer an SSH local port-forward instead of exposing noVNC publicly.
+
+Linux / WSL:
+
+```bash
+ssh -L 6080:localhost:6080 ubuntu@89.168.90.195
+```
+
+Windows:
+
+```powershell
+ssh -L 6080:localhost:6080 ubuntu@89.168.90.195 -i C:\Users\yanni\.ssh\ssh-key-2023-09-20.key
+```
+
+Keep that SSH session open, then browse to [http://localhost:6080/vnc.html](http://localhost:6080/vnc.html) locally. This keeps noVNC off the public internet and does not require nginx changes. If the compose port mapping is later restricted to `127.0.0.1`, the SSH tunnel still works and is the safer server setup.
+
 If you need to force headless mode for debugging outside Docker, set `CHATGPT_BROWSER_HEADLESS=true`.
 
 Run one-shot processing inside Docker:

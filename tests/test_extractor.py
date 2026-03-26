@@ -62,6 +62,32 @@ EXAMPLE_HTML = f"""
 </html>
 """
 
+PAYWALLED_DIRECT_HTML = f"""
+<html data-is-truncated-by-paywall>
+  <head>
+    <title>Karin Prien | DIE ZEIT</title>
+    <meta property="og:title" content='Karin Prien: "Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so"' />
+    <meta property="og:site_name" content="DIE ZEIT" />
+    <script type="application/ld+json">
+      {{
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
+        "headline": "Karin Prien",
+        "isAccessibleForFree": "False",
+        "articleBody": {json.dumps(ARTICLE_BODY)}
+      }}
+    </script>
+  </head>
+  <body>
+    <article>
+      <h1>Z+ (abopflichtiger Inhalt); Karin Prien</h1>
+      <p>{ARTICLE_BODY}</p>
+    </article>
+    <aside id="paywall"></aside>
+  </body>
+</html>
+"""
+
 
 def test_extractor_prefers_full_ld_json_body() -> None:
     extractor = ArticleExtractor()
@@ -75,6 +101,7 @@ def test_extractor_prefers_full_ld_json_body() -> None:
     assert article.source == "Example News"
     assert article.author == "Jane Doe"
     assert article.published_at == "2026-03-24"
+    assert article.paywalled is False
     assert "Paragraph seven" in article.body_text
 
 
@@ -124,6 +151,34 @@ def test_extractor_ignores_fides_privacy_overlay() -> None:
     assert article is not None
     assert "Manage Privacy Preferences" not in article.body_text
     assert "Sentence 20" in article.body_text
+
+
+def test_extractor_marks_paywalled_direct_page_incomplete() -> None:
+    extractor = ArticleExtractor()
+
+    article = extractor.extract(
+        url="https://www.zeit.de/example",
+        final_url="https://www.zeit.de/example",
+        html=PAYWALLED_DIRECT_HTML,
+    )
+
+    assert article is not None
+    assert article.paywalled is True
+    assert extractor.is_incomplete(article) is True
+
+
+def test_extractor_does_not_mark_archive_snapshot_incomplete_for_copied_paywall_text() -> None:
+    extractor = ArticleExtractor()
+
+    article = extractor.extract(
+        url="https://www.zeit.de/example",
+        final_url="https://archive.is/example",
+        html=PAYWALLED_DIRECT_HTML,
+    )
+
+    assert article is not None
+    assert article.paywalled is False
+    assert extractor.is_incomplete(article) is False
 
 
 def test_extractor_trims_to_title_and_drops_related_content() -> None:

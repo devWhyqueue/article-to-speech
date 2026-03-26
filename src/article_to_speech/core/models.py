@@ -41,6 +41,7 @@ class ResolvedArticle:
     author: str | None
     published_at: str | None
     body_text: str
+    paywalled: bool = False
     trace: tuple[str, ...] = ()
 
 

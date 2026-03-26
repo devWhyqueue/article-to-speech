@@ -14,7 +14,7 @@ from article_to_speech.core.models import ResolvedArticle
 
 class StubExtractor:
     def extract(self, *, url: str, final_url: str, html: str) -> ResolvedArticle | None:
-        if "full article" not in html:
+        if "article" not in html:
             return None
         return ResolvedArticle(
             canonical_url=url,
@@ -25,11 +25,12 @@ class StubExtractor:
             author=None,
             published_at=None,
             body_text="full article body",
+            paywalled="paywalled" in html,
             trace=("stub",),
         )
 
     def is_incomplete(self, article: ResolvedArticle) -> bool:
-        return False
+        return article.paywalled
 
 
 class StubBrowserFetcher:
@@ -90,7 +91,11 @@ async def test_resolve_uses_archive_render_when_direct_extraction_is_incomplete(
     browser_fetcher = StubBrowserFetcher("full article from browser")
     client = StubClient(
         {
-            "https://example.com/story": _response("https://example.com/story", 200, "teaser"),
+            "https://example.com/story": _response(
+                "https://example.com/story",
+                200,
+                "paywalled full article",
+            ),
         }
     )
     resolver._extractor = cast(ArticleExtractor, StubExtractor())
@@ -102,6 +107,24 @@ async def test_resolve_uses_archive_render_when_direct_extraction_is_incomplete(
     assert article.trace == ("stub", "archive_render")
     assert client.requested_urls == ["https://example.com/story"]
     assert browser_fetcher.rendered_urls == ["https://example.com/story"]
+
+
+async def test_resolve_accepts_direct_article_when_not_paywalled() -> None:
+    resolver = ArticleResolver(_settings())
+    browser_fetcher = StubBrowserFetcher("unused browser article")
+    client = StubClient(
+        {
+            "https://example.com/story": _response("https://example.com/story", 200, "full article"),
+        }
+    )
+    resolver._extractor = cast(ArticleExtractor, StubExtractor())
+    resolver._browser_fetcher = cast(BrowserPageFetcher, browser_fetcher)
+    resolver._client = cast(httpx.AsyncClient, client)
+
+    article = await resolver.resolve("https://example.com/story")
+
+    assert article.trace == ("stub", "direct")
+    assert browser_fetcher.rendered_urls == []
 
 
 async def test_resolve_falls_back_to_archive_render_after_direct_http_error() -> None:
