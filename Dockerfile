@@ -55,6 +55,7 @@ RUN uv sync --frozen --no-dev --no-install-project && \
 
 COPY src ./src
 COPY docker ./docker
+RUN chmod 755 /app/docker/entrypoint.sh
 
 RUN uv sync --frozen --no-dev
 
