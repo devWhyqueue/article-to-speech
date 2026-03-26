@@ -6,7 +6,6 @@ from urllib.parse import urljoin
 from playwright.async_api import Error, Locator, Page
 
 from article_to_speech.core.browser_runtime import is_project_page_url
-from article_to_speech.browser.ui_audio import locate_read_aloud_button
 
 _NEW_CHAT_SELECTORS = [
     "a[data-testid='create-new-chat-button']",

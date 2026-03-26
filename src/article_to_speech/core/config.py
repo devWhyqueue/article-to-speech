@@ -191,7 +191,6 @@ class Settings:
     article_timeout_seconds: float = 25.0
     article_retry_count: int = 3
     telegram_poll_timeout_seconds: int = 30
-    max_article_chars_per_chunk: int = 12000
     min_article_word_count: int = 250
 
     @classmethod

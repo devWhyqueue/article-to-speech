@@ -48,8 +48,6 @@ class ResolvedArticle:
 class NarrationRequest:
     article: ResolvedArticle
     prompt_text: str
-    chunk_index: int
-    chunk_count: int
 
 
 @dataclass(slots=True, frozen=True)

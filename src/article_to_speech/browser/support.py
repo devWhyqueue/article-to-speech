@@ -13,7 +13,7 @@ from article_to_speech.browser.capture import (
     collect_browser_snapshot,
     write_diagnostics,
 )
-from article_to_speech.browser.ui import locate_read_aloud_button
+from article_to_speech.browser.ui_audio import locate_read_aloud_button
 from article_to_speech.core.exceptions import AuthenticationRequiredError, BrowserAutomationError
 from article_to_speech.core.models import AudioArtifact, BrowserStepLog
 from article_to_speech.infra.audio import concat_mp3_files
@@ -106,6 +106,7 @@ async def wait_for_assistant_response(page: Page, previous_count: int) -> None:
         """,
         timeout=600_000,
     )
+    await page.wait_for_timeout(10_000)
     await page.wait_for_timeout(_UI_SETTLE_MS)
 
 
@@ -164,10 +165,35 @@ async def capture_audio_chunk(
             }
         },
     )
+    await _stop_audio_playback(page)
     network_paths = _write_network_payloads(chunk_dir, response_payloads)
     if network_paths:
         return network_paths
     raise BrowserAutomationError("Failed to capture the ChatGPT synthesize response.")
+
+
+async def _stop_audio_playback(page: Page) -> None:
+    """Stop ChatGPT playback after the synthesize response has been captured."""
+    stop_pattern = re.compile(r"^stop$|^pause$|^anhalten$|^stop reading$", re.I)
+    for role in ("menuitem", "button"):
+        stop_button = page.get_by_role(role, name=stop_pattern)
+        if await stop_button.count() and await stop_button.first.is_visible():
+            await stop_button.first.click(timeout=10_000, force=True)
+            await page.wait_for_timeout(500)
+            return
+    await page.evaluate(
+        """
+        () => {
+            for (const audio of document.querySelectorAll("audio")) {
+                try {
+                    audio.pause();
+                } catch (error) {
+                    console.warn("audio pause failed", error);
+                }
+            }
+        }
+        """
+    )
 
 
 async def monitor_setup_challenge(page: Page, diagnostics_dir: Path) -> None:

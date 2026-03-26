@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 
 from article_to_speech.core.models import NarrationRequest, ResolvedArticle
 
@@ -21,10 +20,7 @@ BOILERPLATE_PREFIXES = (
 )
 
 
-@dataclass(slots=True)
 class NarrationFormatter:
-    max_chars_per_chunk: int
-
     def clean_article_text(self, article: ResolvedArticle) -> str:
         """Remove obvious boilerplate while preserving the article wording."""
         lines = []
@@ -43,57 +39,15 @@ class NarrationFormatter:
         return _trim_leading_noise(cleaned)
 
     def build_requests(self, article: ResolvedArticle) -> list[NarrationRequest]:
-        """Split a full article into prompt chunks for ChatGPT narration."""
+        """Build the ChatGPT narration request from the cleaned article body."""
         cleaned = self.clean_article_text(article)
-        chunks = _chunk_text(cleaned, self.max_chars_per_chunk)
-        requests: list[NarrationRequest] = []
-        for index, chunk in enumerate(chunks, start=1):
-            prompt_text = (
-                "The user provided rough webpage text for a private accessibility read-aloud. "
-                "Return only the main article body from that text. Remove obvious navigation, "
-                "share labels, editor modules, related links, and other site chrome. Keep the "
-                "actual article paragraphs in their original order and wording where possible. "
-                "Do not add commentary or a summary. Reply in the normal chat response only; "
-                "do not open Canvas, artifacts, or any side panel.\n\n"
-                f"Part {index} of {len(chunks)}\n"
-                "Return only the text between <text> tags.\n\n"
-                f"<text>\n{chunk}\n</text>"
-            )
-            requests.append(
-                NarrationRequest(
-                    article=article,
-                    prompt_text=prompt_text,
-                    chunk_index=index,
-                    chunk_count=len(chunks),
-                )
-            )
-        return requests
-
-
-def _chunk_text(text: str, max_chars: int) -> list[str]:
-    if len(text) <= max_chars:
-        return [text]
-    paragraphs = text.split("\n\n")
-    chunks: list[str] = []
-    current = ""
-    for paragraph in paragraphs:
-        candidate = paragraph if not current else f"{current}\n\n{paragraph}"
-        if len(candidate) <= max_chars:
-            current = candidate
-            continue
-        if current:
-            chunks.append(current)
-        if len(paragraph) <= max_chars:
-            current = paragraph
-            continue
-        start = 0
-        while start < len(paragraph):
-            chunks.append(paragraph[start : start + max_chars])
-            start += max_chars
-        current = ""
-    if current:
-        chunks.append(current)
-    return chunks or [text]
+        prompt_text = (
+            "The user provided rough webpage text for a private accessibility read-aloud. "
+            "Format nicely, i.e. start with heading and subtitle and main text after, "
+            "all separated by newlines. Preserve original wording but remove obvious noise.\n\n"
+            f"<text>\n{cleaned}\n</text>"
+        )
+        return [NarrationRequest(article=article, prompt_text=prompt_text)]
 
 
 def _looks_like_chrome_label(text: str) -> bool:

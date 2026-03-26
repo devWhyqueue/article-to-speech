@@ -88,14 +88,14 @@ class ChatGPTBrowserAutomation:
 
                 try:
                     await self._open_chatgpt(page, step_logs)
-                    for request in requests:
+                    for request_index, request in enumerate(requests, start=1):
                         await self._send_prompt(page, request, step_logs)
                         raw_paths = await capture_audio_chunk(
                             page=page,
                             downloads=downloads,
                             response_payloads=response_payloads,
                             diagnostics_dir=diagnostics_dir,
-                            chunk_index=request.chunk_index,
+                            chunk_index=request_index,
                         )
                         for raw_path in raw_paths:
                             if raw_path.suffix.lower() == ".mp3":
@@ -189,7 +189,7 @@ class ChatGPTBrowserAutomation:
         step_logs.append(
             BrowserStepLog(
                 step="send_prompt",
-                detail=f"Submitting chunk {request.chunk_index}/{request.chunk_count}",
+                detail="Submitting narration prompt",
             )
         )
         assistant_messages = page.locator("[data-message-author-role='assistant']")

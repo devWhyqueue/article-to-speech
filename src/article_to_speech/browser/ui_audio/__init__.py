@@ -40,7 +40,6 @@ async def locate_read_aloud_button(turn: Locator, page: Page) -> Locator | None:
     """Locate the read-aloud control for the latest assistant message."""
     for _ in range(3):
         await _scroll_chat_to_bottom(page)
-        await _scroll_turn_into_view(turn)
         for hover_target in (turn.locator("[data-message-author-role='assistant']").last, turn):
             if await hover_target.count():
                 try:
@@ -113,18 +112,13 @@ async def _open_more_actions_and_find_read_aloud(turn: Locator, page: Page) -> L
     return await _matching_audio_selector(page)
 
 
-async def _scroll_turn_into_view(turn: Locator) -> None:
-    if not await turn.count():
-        return
-    await turn.last.scroll_into_view_if_needed(timeout=10_000)
-    await turn.page.wait_for_timeout(500)
-
-
 async def _find_more_actions_button(turn: Locator, page: Page) -> Locator | None:
     candidates = (
         turn.locator("button[aria-label*='More actions'], button[aria-label*='Mehr Aktionen']"),
         turn.get_by_role("button", name=re.compile(r"more actions|mehr aktionen", re.I)),
-        page.locator("main button[aria-label*='More actions'], main button[aria-label*='Mehr Aktionen']"),
+        page.locator(
+            "main button[aria-label*='More actions'], main button[aria-label*='Mehr Aktionen']"
+        ),
         page.get_by_role("button", name=re.compile(r"more actions|mehr aktionen", re.I)),
     )
     for locator in candidates:
@@ -133,7 +127,13 @@ async def _find_more_actions_button(turn: Locator, page: Page) -> Locator | None
             if not await button.is_visible():
                 continue
             label = " ".join(
-                filter(None, [await button.get_attribute("aria-label"), await button.get_attribute("data-testid")])
+                filter(
+                    None,
+                    [
+                        await button.get_attribute("aria-label"),
+                        await button.get_attribute("data-testid"),
+                    ],
+                )
             )
             if "actions" in label.lower() or "aktionen" in label.lower():
                 return button

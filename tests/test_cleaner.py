@@ -2,8 +2,8 @@ from article_to_speech.article.cleaner import NarrationFormatter
 from article_to_speech.core.models import ResolvedArticle
 
 
-def test_cleaner_preserves_article_text_and_splits_chunks() -> None:
-    formatter = NarrationFormatter(max_chars_per_chunk=200)
+def test_cleaner_preserves_article_text_in_single_request() -> None:
+    formatter = NarrationFormatter()
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",
@@ -15,13 +15,16 @@ def test_cleaner_preserves_article_text_and_splits_chunks() -> None:
         body_text=("Paragraph one.\n\n" + ("Paragraph two. " * 40)),
     )
     requests = formatter.build_requests(article)
-    assert len(requests) >= 2
-    assert all("rough webpage text" in request.prompt_text for request in requests)
-    assert all("<text>" in request.prompt_text for request in requests)
+    assert len(requests) == 1
+    assert "rough webpage text" in requests[0].prompt_text
+    assert "Preserve original wording." in requests[0].prompt_text
+    assert "<text>" in requests[0].prompt_text
+    assert "Paragraph one." in requests[0].prompt_text
+    assert "Paragraph two." in requests[0].prompt_text
 
 
 def test_cleaner_drops_boilerplate_lines() -> None:
-    formatter = NarrationFormatter(max_chars_per_chunk=500)
+    formatter = NarrationFormatter()
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",
@@ -39,7 +42,7 @@ def test_cleaner_drops_boilerplate_lines() -> None:
 
 
 def test_cleaner_trims_leading_site_chrome_labels() -> None:
-    formatter = NarrationFormatter(max_chars_per_chunk=500)
+    formatter = NarrationFormatter()
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",

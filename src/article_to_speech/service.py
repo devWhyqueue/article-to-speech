@@ -199,7 +199,7 @@ def build_service(settings: Settings) -> ArticleToSpeechService:
         telegram=TelegramBotClient(settings.telegram_bot_token),
         resolver=ArticleResolver(settings),
         browser=ChatGPTBrowserAutomation(settings),
-        formatter=NarrationFormatter(settings.max_article_chars_per_chunk),
+        formatter=NarrationFormatter(),
     )
 
 
