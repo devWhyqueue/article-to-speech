@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import sqlite3
+
 from article_to_speech.infra.persistence import JobStore
 
 
@@ -16,5 +18,10 @@ def test_job_store_round_trip(tmp_path: Path) -> None:
         "Example",
         "/tmp/audio.mp3",
     )
-    pending = store.list_pending()
-    assert pending == []
+    with sqlite3.connect(tmp_path / "jobs.sqlite3") as connection:
+        status, audio_path = connection.execute(
+            "SELECT status, audio_path FROM jobs WHERE id = ?",
+            (processing.job_id,),
+        ).fetchone()
+    assert status == "succeeded"
+    assert audio_path == "/tmp/audio.mp3"

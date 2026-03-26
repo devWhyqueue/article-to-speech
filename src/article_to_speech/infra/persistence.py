@@ -65,19 +65,6 @@ class JobStore:
             row = self._insert_or_fetch_job(connection, chat_id, message_id, input_url, now)
             return self._row_to_job(row)
 
-    def list_pending(self) -> list[IncomingUrlJob]:
-        """Return queued or interrupted jobs that should be resumed on startup."""
-        with self._lock, self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM jobs
-                WHERE status IN (?, ?)
-                ORDER BY created_at ASC
-                """,
-                (JobStatus.QUEUED.value, JobStatus.PROCESSING.value),
-            ).fetchall()
-        return [self._row_to_job(row) for row in rows]
-
     def mark_processing(self, job_id: int, canonical_url: str | None) -> IncomingUrlJob:
         """Mark a job as in-flight and increment its attempt counter."""
         now = _utc_now_text()

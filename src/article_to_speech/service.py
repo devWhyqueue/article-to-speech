@@ -46,10 +46,6 @@ class ArticleToSpeechService:
         await self._telegram.close()
         await self._resolver.close()
 
-    async def process_existing_pending_jobs(self) -> None:
-        for job in self._store.list_pending():
-            await self.process_job(job, notify_failures=False)
-
     def enqueue_from_message(
         self,
         *,
@@ -121,7 +117,6 @@ class TelegramPollingRunner:
         self._next_update_offset: int | None = None
 
     async def run(self) -> None:
-        await self._service.process_existing_pending_jobs()
         await self._telegram.delete_webhook()
         await self._telegram.get_me()
         while True:

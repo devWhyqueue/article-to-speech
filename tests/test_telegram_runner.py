@@ -14,7 +14,6 @@ class FakeService:
         self.should_raise_invalid_url = should_raise_invalid_url
         self.enqueued_jobs: list[IncomingUrlJob] = []
         self.processed_jobs: list[tuple[IncomingUrlJob, bool]] = []
-        self.process_existing_pending_jobs_called = False
 
     def enqueue_from_message(self, *, chat_id: int, message_id: int | None, text: str) -> IncomingUrlJob:
         if self.should_raise_invalid_url:
@@ -33,9 +32,6 @@ class FakeService:
 
     async def process_job(self, job: IncomingUrlJob, *, notify_failures: bool) -> None:
         self.processed_jobs.append((replace(job), notify_failures))
-
-    async def process_existing_pending_jobs(self) -> None:
-        self.process_existing_pending_jobs_called = True
 
 
 class FakeTelegram:
@@ -125,7 +121,6 @@ async def test_runner_disables_webhook_before_polling() -> None:
     except RuntimeError as error:
         assert str(error) == "stop"
 
-    assert service.process_existing_pending_jobs_called is True
     assert telegram.deleted_webhook is True
     assert telegram.get_me_called is True
     assert telegram.get_updates_calls == [(None, 30)]

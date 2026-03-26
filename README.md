@@ -81,7 +81,7 @@ docker compose run --rm app process-url \
 By default runtime data lives in `.runtime/` locally and is mounted into `/data/` in Docker:
 
 - `profile/` persistent ChatGPT browser profile
-- `state/jobs.sqlite3` restart-safe job state
+- `state/jobs.sqlite3` job state history
 - `artifacts/` captured audio files
 - `diagnostics/` screenshots, HTML dumps, and browser step logs
 
