@@ -101,9 +101,13 @@ class StubResolver:
 
 
 class StubBrowser:
+    def __init__(self) -> None:
+        self.requests: list[str] = []
+
     async def synthesize_article(
         self, article: ResolvedArticle, requests: list[str]
     ) -> AudioArtifact:
+        self.requests = requests
         return AudioArtifact(
             path=Path("/tmp/audio.mp3"),
             mime_type="audio/mpeg",
@@ -189,4 +193,47 @@ async def test_process_job_skips_intermediate_message_for_non_archive_url() -> N
     await service.process_job(job, notify_failures=True)
 
     assert telegram.messages == []
+    assert len(telegram.audio_calls) == 1
+
+
+async def test_process_job_sends_single_audio_for_multiple_requests() -> None:
+    article = ResolvedArticle(
+        canonical_url="https://example.com/story",
+        original_url="https://example.com/story",
+        final_url="https://example.com/story",
+        title="Example Headline",
+        subtitle=None,
+        source="Example News",
+        author="Jane Doe",
+        published_at="2026-03-24",
+        body_text="Body text",
+    )
+    telegram = StubTelegram()
+    browser = StubBrowser()
+
+    class MultiRequestFormatter:
+        def build_requests(self, article: ResolvedArticle) -> list[str]:
+            return [f"{article.body_text} part 1", f"{article.body_text} part 2"]
+
+    service = ArticleToSpeechService(
+        settings=cast(Any, object()),
+        store=cast(Any, StubStore()),
+        telegram=cast(Any, telegram),
+        resolver=cast(Any, StubResolver(article)),
+        browser=cast(Any, browser),
+        formatter=cast(Any, MultiRequestFormatter()),
+    )
+    job = IncomingUrlJob(
+        job_id=1,
+        chat_id=123,
+        message_id=99,
+        input_url="https://example.com/story",
+        created_at=datetime.now(UTC),
+        status=JobStatus.QUEUED,
+        attempts=0,
+    )
+
+    await service.process_job(job, notify_failures=True)
+
+    assert browser.requests == ["Body text part 1", "Body text part 2"]
     assert len(telegram.audio_calls) == 1
