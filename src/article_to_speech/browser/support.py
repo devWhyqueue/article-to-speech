@@ -19,7 +19,7 @@ from article_to_speech.core.models import AudioArtifact, BrowserStepLog
 from article_to_speech.infra.audio import concat_mp3_files
 from article_to_speech.infra.browser_audio_files import (
     _wait_for_audio_response_payload,
-    capture_audio_payload_paths,
+    _write_network_payloads,
 )
 
 LOGIN_TEXT_PATTERN = re.compile(
@@ -161,7 +161,8 @@ async def capture_audio_chunk(
         response_payloads,
         timeout_ms=_FIRST_AUDIO_RESPONSE_TIMEOUT_MS,
     )
-    network_paths = await capture_audio_payload_paths(page, response_payloads, chunk_dir)
+    await _stop_audio_playback(page)
+    network_paths = _write_network_payloads(chunk_dir, response_payloads)
     LOGGER.info(
         "chatgpt_audio_capture_wait_done",
         extra={
@@ -172,7 +173,6 @@ async def capture_audio_chunk(
             }
         },
     )
-    await _stop_audio_playback(page)
     if network_paths:
         return network_paths
     raise BrowserAutomationError("Failed to capture the ChatGPT synthesize response.")
