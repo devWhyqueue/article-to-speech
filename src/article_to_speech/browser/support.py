@@ -19,7 +19,7 @@ from article_to_speech.core.models import AudioArtifact, BrowserStepLog
 from article_to_speech.infra.audio import concat_mp3_files
 from article_to_speech.infra.browser_audio_files import (
     _wait_for_audio_response_payload,
-    _write_network_payloads,
+    capture_audio_payload_paths,
 )
 
 LOGIN_TEXT_PATTERN = re.compile(
@@ -29,6 +29,7 @@ LOGIN_TEXT_PATTERN = re.compile(
 LOGGER = logging.getLogger(__name__)
 _CLOUDFLARE_COOKIE_NAMES = ("cf_clearance", "__cf_bm", "__cflb")
 _UI_SETTLE_MS = 5_000
+_FIRST_AUDIO_RESPONSE_TIMEOUT_MS = 180_000
 
 
 async def clear_chatgpt_challenge_cookies(context: BrowserContext) -> None:
@@ -155,18 +156,23 @@ async def capture_audio_chunk(
     LOGGER.info("chatgpt_audio_control_found")
     await read_aloud_button.click(timeout=10_000)
     LOGGER.info("chatgpt_audio_capture_wait_start")
-    await _wait_for_audio_response_payload(page, response_payloads)
+    await _wait_for_audio_response_payload(
+        page,
+        response_payloads,
+        timeout_ms=_FIRST_AUDIO_RESPONSE_TIMEOUT_MS,
+    )
+    network_paths = await capture_audio_payload_paths(page, response_payloads, chunk_dir)
     LOGGER.info(
         "chatgpt_audio_capture_wait_done",
         extra={
             "context": {
                 "downloads": len(downloads),
                 "response_payloads": len(response_payloads),
+                "written_paths": len(network_paths),
             }
         },
     )
     await _stop_audio_playback(page)
-    network_paths = _write_network_payloads(chunk_dir, response_payloads)
     if network_paths:
         return network_paths
     raise BrowserAutomationError("Failed to capture the ChatGPT synthesize response.")

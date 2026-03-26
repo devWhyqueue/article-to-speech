@@ -10,6 +10,7 @@ from bs4.element import Tag
 from readability import Document
 
 from article_to_speech.article.extractor_support import (
+    _extract_archive_replay_text,
     _extract_archive_story_text,
     _extract_body_author,
     _extract_body_published,
@@ -61,6 +62,7 @@ class ArticleExtractor:
 def _best_attempt(soup: BeautifulSoup, html: str, final_url: str) -> ExtractionAttempt | None:
     attempts = [
         _archive_story_attempt(soup),
+        _archive_replay_attempt(soup),
         _extract_ld_json_article_body(soup),
         _extract_json_article_body(soup),
         _extract_container_text(soup, "article", ["p", "h2", "li"], "article_tag"),
@@ -79,6 +81,13 @@ def _archive_story_attempt(soup: BeautifulSoup) -> ExtractionAttempt | None:
     if not cleaned:
         return None
     return ExtractionAttempt("archive_story", cleaned)
+
+
+def _archive_replay_attempt(soup: BeautifulSoup) -> ExtractionAttempt | None:
+    cleaned = _extract_archive_replay_text(soup)
+    if not cleaned:
+        return None
+    return ExtractionAttempt("archive_replay", cleaned)
 
 
 def _extract_ld_json_article_body(soup: BeautifulSoup) -> ExtractionAttempt | None:

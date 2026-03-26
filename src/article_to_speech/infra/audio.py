@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import mimetypes
 import os
@@ -63,6 +64,30 @@ def concat_mp3_files(input_paths: list[Path], output_path: Path) -> AudioArtifac
     )
     concat_file.unlink(missing_ok=True)
     return _build_artifact(output_path, output_path.read_bytes(), "concat")
+
+
+def probe_audio_duration_seconds(input_path: Path) -> float | None:
+    """Return the media duration in seconds when ffprobe can determine it."""
+    process = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(input_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(process.stdout)
+    duration_value = payload.get("format", {}).get("duration")
+    if duration_value is None:
+        return None
+    return float(duration_value)
 
 
 def _build_written_artifact(output_path: Path, payload: bytes, source_method: str) -> AudioArtifact:

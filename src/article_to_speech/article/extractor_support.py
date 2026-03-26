@@ -5,6 +5,19 @@ import re
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+ARCHIVE_REPLAY_NOISE_MARKERS = (
+    "zur merkliste hinzufügen",
+    "artikel anhören",
+    "weitere optionen zum teilen",
+    "bild vergrößern",
+    "foto:",
+    "dieser artikel gehört zum angebot von spiegel+",
+    "mehr zum thema",
+    "debatte",
+    "diskutieren sie hier",
+    "startseite feedback",
+)
+
 
 def sanitize_html(html: str) -> str:
     """Remove consent and privacy overlays before extraction."""
@@ -110,6 +123,25 @@ def _extract_archive_story_text(soup: BeautifulSoup) -> str | None:
     return cleaned or None
 
 
+def _extract_archive_replay_text(soup: BeautifulSoup) -> str | None:
+    content = soup.select_one("#CONTENT")
+    if content is None:
+        return None
+    article = _select_archive_replay_article(content)
+    if article is None:
+        return None
+    body_container = _select_archive_replay_body_container(article)
+    if body_container is None:
+        return None
+    parts = []
+    for child in body_container.find_all(recursive=False):
+        text = _normalize_text(child.get_text(" ", strip=True))
+        if _looks_like_archive_replay_body_block(text):
+            parts.append(text)
+    cleaned = _normalize_text("\n\n".join(parts))
+    return cleaned or None
+
+
 def _normalize_text(text: str) -> str:
     lines = []
     for line in text.replace("\r", "\n").splitlines():
@@ -154,3 +186,45 @@ def _looks_like_story_paragraph(text: str) -> bool:
     if any(marker in lowered for marker in noise_markers):
         return False
     return any(punctuation in text for punctuation in (".", "?", "!", ";"))
+
+
+def _select_archive_replay_article(content: Tag) -> Tag | None:
+    articles = content.find_all("article")
+    if not articles:
+        return None
+    return max(
+        articles,
+        key=lambda article: len(_normalize_text(article.get_text(" ", strip=True)).split()),
+    )
+
+
+def _select_archive_replay_body_container(article: Tag) -> Tag | None:
+    best_container: Tag | None = None
+    best_score = (0, 0)
+    for container in article.find_all("div"):
+        direct_children = container.find_all(recursive=False)
+        if not direct_children:
+            continue
+        body_blocks = [
+            _normalize_text(child.get_text(" ", strip=True))
+            for child in direct_children
+            if _looks_like_archive_replay_body_block(
+                _normalize_text(child.get_text(" ", strip=True))
+            )
+        ]
+        score = (len(body_blocks), sum(len(block.split()) for block in body_blocks))
+        if score > best_score:
+            best_container = container
+            best_score = score
+    if best_score[0] < 3:
+        return None
+    return best_container
+
+
+def _looks_like_archive_replay_body_block(text: str) -> bool:
+    if len(text.split()) < 20:
+        return False
+    lowered = text.lower()
+    if any(marker in lowered for marker in ARCHIVE_REPLAY_NOISE_MARKERS):
+        return False
+    return any(punctuation in text for punctuation in (".", "?", "!", ";", ":"))

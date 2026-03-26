@@ -17,7 +17,7 @@ def test_cleaner_preserves_article_text_in_single_request() -> None:
     requests = formatter.build_requests(article)
     assert len(requests) == 1
     assert "rough webpage text" in requests[0].prompt_text
-    assert "Preserve original wording." in requests[0].prompt_text
+    assert "Preserve original wording but remove obvious noise." in requests[0].prompt_text
     assert "<text>" in requests[0].prompt_text
     assert "Paragraph one." in requests[0].prompt_text
     assert "Paragraph two." in requests[0].prompt_text

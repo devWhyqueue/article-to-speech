@@ -5,7 +5,11 @@ import pytest
 from article_to_speech.browser.capture import artifact_file_name, maybe_capture_response_bytes
 from article_to_speech.browser.support import final_artifact
 from article_to_speech.core.models import AudioArtifact
-from article_to_speech.infra.browser_audio_files import _wait_for_audio_response_payload
+from article_to_speech.infra.browser_audio_files import (
+    _looks_like_full_sized_chatgpt_chunk,
+    _wait_for_audio_response_payload,
+    _write_network_payloads,
+)
 
 
 def test_artifact_file_name_includes_archive_snapshot_id() -> None:
@@ -97,6 +101,35 @@ async def test_wait_for_audio_response_payload_returns_when_payload_appears() ->
 
 
 @pytest.mark.asyncio
+async def test_wait_for_audio_response_payload_waits_for_next_payload_count() -> None:
+    page = WaitingPage()
+    response_payloads = [("https://chatgpt.com/backend-api/synthesize", "audio/aac", b"first")]
+
+    async def inject_payload() -> None:
+        if len(page.wait_calls) == 3 and len(response_payloads) == 1:
+            response_payloads.append(
+                ("https://chatgpt.com/backend-api/synthesize", "audio/aac", b"second")
+            )
+
+    original_wait = page.wait_for_timeout
+
+    async def instrumented_wait(milliseconds: int) -> None:
+        await original_wait(milliseconds)
+        await inject_payload()
+
+    page.wait_for_timeout = instrumented_wait  # type: ignore[method-assign]
+
+    await _wait_for_audio_response_payload(
+        page,
+        response_payloads,
+        timeout_ms=5_000,
+        minimum_payload_count=2,
+    )
+
+    assert page.wait_calls == [500, 500, 500]
+
+
+@pytest.mark.asyncio
 async def test_wait_for_audio_response_payload_times_out_without_payload() -> None:
     page = WaitingPage()
 
@@ -104,3 +137,24 @@ async def test_wait_for_audio_response_payload_times_out_without_payload() -> No
         await _wait_for_audio_response_payload(page, [], timeout_ms=1_500)
 
     assert page.wait_calls == [500, 500, 500]
+
+
+def test_write_network_payloads_uses_sequential_names_for_followup_chunks(tmp_path) -> None:
+    paths = _write_network_payloads(
+        tmp_path,
+        [
+            ("https://chatgpt.com/backend-api/synthesize?part=2", "audio/mpeg", b"chunk-two"),
+            ("https://chatgpt.com/backend-api/synthesize?part=3", "audio/mpeg", b"chunk-three"),
+        ],
+        start_index=2,
+    )
+
+    assert [path.name for path in paths] == ["network-audio-02.mp3", "network-audio-03.mp3"]
+
+
+def test_looks_like_full_sized_chatgpt_chunk_detects_five_minute_boundaries() -> None:
+    assert _looks_like_full_sized_chatgpt_chunk(300.0) is True
+    assert _looks_like_full_sized_chatgpt_chunk(297.4) is True
+    assert _looks_like_full_sized_chatgpt_chunk(303.2) is False
+    assert _looks_like_full_sized_chatgpt_chunk(250.0) is False
+    assert _looks_like_full_sized_chatgpt_chunk(None) is False

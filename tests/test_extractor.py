@@ -1,6 +1,9 @@
 import json
 
+from bs4 import BeautifulSoup
+
 from article_to_speech.article.extractor import ArticleExtractor
+from article_to_speech.article.extractor_support import _extract_archive_replay_text
 
 ARTICLE_BODY = " ".join(
     [
@@ -207,3 +210,121 @@ def test_extractor_prefers_archive_story_structure() -> None:
     assert "Bovino Interview" not in article.body_text
     assert "Related Content" not in article.body_text
     assert "Paragraph 20 contains enough reporting detail" in article.body_text
+
+
+def test_extractor_prefers_archive_replay_article_body() -> None:
+    extractor = ArticleExtractor()
+    archive_blocks = [
+        (
+            "Die schwarz-rote Koalition wagt die Flucht nach vorn. Zumindest behaupten das "
+            "ihre Spitzen, Bundeskanzler Friedrich Merz (CDU) und dessen Vize Lars Klingbeil "
+            "(SPD). Das Land soll mit tiefgreifenden Reformen wieder fit gemacht werden, die "
+            "Konjunktur soll anspringen, und ein großes Unterfangen steht im Raum."
+        ),
+        (
+            "In den nächsten Wochen, so das Versprechen des Kanzlers, werde man sehr hart an "
+            "einer Zukunftsagenda arbeiten. Bis Pfingsten könnte das Paket an Maßnahmen "
+            "stehen, bis zum Sommer die Gesetzentwürfe fertig sein. Was genau ist geplant, "
+            "was können Union und Sozialdemokraten durchsetzen, und was wäre wirklich sinnvoll?"
+        ),
+        (
+            "Die Kosten für die sozialen Systeme laufen immer mehr aus dem Ruder. Bei den "
+            "Krankenkassen klafft in den kommenden Jahren ein Defizit von 13 Milliarden Euro, "
+            "das der Bund nicht mehr ausgleichen kann. Die Zuschüsse für die Rente betragen "
+            "schon heute über 120 Milliarden Euro, und die Haushaltslücke bleibt groß."
+        ),
+        (
+            "Einkommensteuer Weitgehend einig sind sich Union und SPD, dass die Belastung der "
+            "Gehälter durch Steuern und Abgaben zurückgehen müsse. Vor allem Verdiener "
+            "mittlerer und unterer Einkommen sollen wieder mehr Netto vom Brutto bekommen. "
+            "Ökonomen unterstützen die Regierung in diesem Ansinnen, weil das mehr Menschen "
+            "zur Arbeit motiviert."
+        ),
+        (
+            "Mehrwertsteuer Um die Kosten für die Reformen wieder einzudämmen, könnte die "
+            "Mehrwertsteuer angehoben werden. Sie ist im europäischen Vergleich relativ "
+            "niedrig. Zwei Prozentpunkte mehr, also 21 Prozent, würden dem Staat rund 32 "
+            "Milliarden Euro einbringen. Ein Kompromiss bestünde darin, die Mehrwertsteuer "
+            "auf Lebensmittel weiter zu reduzieren."
+        ),
+        (
+            "Mehr Arbeit Die Regierung kann nicht regeln, dass die Deutschen mehr arbeiten. "
+            "Sie kann aber an Stellschrauben drehen, sodass mehr Menschen eine Beschäftigung "
+            "aufnehmen. Die SPD will dafür das Ehegattensplitting abschaffen, das es bislang "
+            "für Ehepartner finanziell unattraktiv machte, zu arbeiten."
+        ),
+        (
+            "Rente Um die Milliardenzuschüsse des Staates für die Rentenbeiträge zu senken, "
+            "könnte der Staat an das Renteneintrittsalter gehen. Außerdem könnte die starre "
+            "Altersgrenze bei der Rente fallen. Die Liste der steuerlichen Privilegien, die "
+            "gestrichen werden könnten, ist lang und politisch toxisch."
+        ),
+    ]
+    html = f"""
+    <html>
+      <head>
+        <meta property="og:title" content="Bewährungsprobe der Regierung: Mehrwertsteuer rauf, Ehegattensplitting weg? Das sind die Reformideen von Schwarz-Rot" />
+        <meta property="og:site_name" content="DER SPIEGEL" />
+        <meta name="author" content="Gerald Traufetter" />
+        <title>Bundesregierung: Mehrwertsteuer rauf, Ehegattensplitting weg? Das sind die Reformideen - DER SPIEGEL</title>
+      </head>
+      <body>
+        <div id="HEADER">archive.today webpage capture</div>
+        <div id="CONTENT">
+          <article>
+            <header>
+              <span>Bewährungsprobe der Regierung</span>
+              <h1>Mehrwertsteuer rauf, Ehegattensplitting weg? Das sind die Reformideen von Schwarz-Rot</h1>
+            </header>
+            <div>
+              <div>Zur Merkliste hinzufügen Artikel anhören (7 Minuten)</div>
+              <section>
+                <div>Bild vergrößern Koalitionäre Klingbeil (SPD) und Merz (CDU) im Kabinett Foto: Reuters</div>
+                <div>Dieser Artikel gehört zum Angebot von SPIEGEL+. Sie können ihn auch ohne Abonnement lesen, weil er Ihnen geschenkt wurde.</div>
+                <div></div>
+                <div>
+                  <div></div>
+                  <div>{archive_blocks[0]}</div>
+                  <div></div>
+                  <section>Mehr zum Thema Teure Pläne von Union und SPD</section>
+                  <div>{archive_blocks[1]} {archive_blocks[2]}</div>
+                  <div></div>
+                  <div>DEBATTE Sind Ihnen Leistungskürzungen lieber als wachsende Beiträge? Diskutieren Sie hier</div>
+                  <div>{archive_blocks[3]}</div>
+                  <div></div>
+                  <div>{archive_blocks[4]}</div>
+                  <div></div>
+                  <div>{archive_blocks[5]}</div>
+                  <div></div>
+                  <div>{archive_blocks[6]}</div>
+                  <div>DEBATTE Rettet die Reformagenda die SPD oder spaltet sie die Partei? Diskutieren Sie hier</div>
+                </div>
+              </section>
+            </div>
+            <footer>Startseite Feedback</footer>
+          </article>
+          <article>
+            <header><h2>Another story</h2></header>
+            <div><p>Short teaser that must not be preferred over the main article replay.</p></div>
+          </article>
+        </div>
+      </body>
+    </html>
+    """
+
+    article = extractor.extract(
+        url="https://example.com/article",
+        final_url="https://archive.is/example",
+        html=html,
+    )
+
+    assert article is not None
+    assert article.source == "DER SPIEGEL"
+    assert article.author == "Gerald Traufetter"
+    assert "Die schwarz-rote Koalition wagt die Flucht nach vorn." in article.body_text
+    assert "Mehrwertsteuer Um die Kosten für die Reformen wieder einzudämmen" in article.body_text
+    replay_text = _extract_archive_replay_text(BeautifulSoup(html, "lxml"))
+
+    assert replay_text is not None
+    assert "Mehr zum Thema" not in replay_text
+    assert "Diskutieren Sie hier" not in replay_text
