@@ -383,3 +383,190 @@ def test_extractor_prefers_archive_replay_article_body() -> None:
     assert replay_text is not None
     assert "Mehr zum Thema" not in replay_text
     assert "Diskutieren Sie hier" not in replay_text
+
+
+def test_extractor_prefers_clean_archive_replay_over_noisy_generic_fallback() -> None:
+    extractor = ArticleExtractor()
+    zeit_body_blocks = [
+        (
+            "DIE ZEIT: Frau Prien, Sie sind die Bundesministerin für Frauen. Es gibt dieser "
+            "Tage viele Frauen, die sagen: Wir fühlen uns nicht sicher. Was entgegnen Sie "
+            "ihnen?"
+        ),
+        (
+            "Karin Prien: Wir beobachten in den vergangenen Jahren einen Anstieg an "
+            "geschlechtsspezifischer Gewalt, an häuslicher Gewalt. In einer "
+            "Dunkelfeldstudie haben wir darüber hinaus festgestellt, dass gerade unter "
+            "jungen Frauen viele von sexualisierter Gewalt betroffen sind."
+        ),
+        (
+            "Karin Prien: Deshalb steht völlig außer Frage, dass wir eine angepasste "
+            "Gesetzgebung brauchen. Damit haben wir bereits begonnen. Im Februar ist das "
+            "Gewalthilfegesetz in Kraft getreten, das im ganzen Land Frauen einen "
+            "kostenfreien Rechtsanspruch auf Schutz und Beratung zusichert."
+        ),
+        (
+            "ZEIT: Man könnte aber auch sagen, ein gewisser aggressiver Überschuss gehört "
+            "dazu, wenn man gehört werden will."
+        ),
+        (
+            "Prien: Mir geht es darum, dass Männer und Frauen gut miteinander leben. Wir "
+            "steuern inzwischen auf einen Political Gender-Gap zu: Männer entwickeln sich "
+            "eher konservativ oder reaktionär, Frauen eher liberal oder progressiv."
+        ),
+        (
+            '"Die Krise der Männlichkeit ist nicht neu"'
+        ),
+        (
+            "Prien: Die Zahlen zeigen uns, dass die Mehrheit der Männer Gleichstellung für "
+            "richtig hält. Allerdings eher auf der Ebene von Gesellschaft und Politik und "
+            "weniger individuell bei sich selbst. Sie fragen sich kaum, welchen Beitrag kann "
+            "ich als Mann in meiner Partnerschaft, in meiner Familie, in meinem Unternehmen "
+            "dazu leisten, dass Gleichstellung umgesetzt wird."
+        ),
+        (
+            '"Sie brauchen mehr männliche Vorbilder"'
+        ),
+        (
+            "Prien: Es gibt beispielsweise Benachteiligung im Bildungssystem. Wir haben uns "
+            "auf Mädchen fokussiert, das sollten wir auch weiter tun, aber wir müssen eben "
+            "zugleich auf die Jungs gucken. Der beklagte Leistungsrückgang ist auch auf "
+            "schlechtere Leistungen von Jungs zurückzuführen."
+        ),
+        (
+            "ZEIT: Wir würden mit Ihnen gern über ein paar konkrete politische "
+            "Entscheidungen in Sachen Schutz von Frauen sprechen. Sie hatten vorhin das "
+            "Gewaltschutzgesetz erwähnt."
+        ),
+        (
+            'Prien: Ich habe angekündigt, das Bundesprogramm "Demokratie leben!" in Teilen '
+            "neu aufzustellen, pluralistischer auszurichten, mit mehr Breitenwirkung und "
+            "größerer demokratischer Legitimation."
+        ),
+    ]
+    html = f"""
+    <html>
+      <head>
+        <meta property="og:title" content='Karin Prien: "Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so"' />
+        <meta property="og:site_name" content="DIE ZEIT" />
+        <title>Karin Prien: "Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so" | DIE ZEIT</title>
+      </head>
+      <body>
+        <div id="CONTENT">
+          <main>
+            <article>
+              <div>
+                <figure>
+                  <div>Karin Prien, 60, ist Mitglied der CDU.</div>
+                </figure>
+                <div>
+                  <h1>Karin Prien: "Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so"</h1>
+                </div>
+                <div>Menschen wollen in Partnerschaft leben, trotz allem. Ein Gespräch mit der Bundesfrauenministerin Karin Prien darüber, wie man Frauen schützt und Männer besser versteht.</div>
+                <div>Interview: Elisabeth Raether und Bernd Ulrich</div>
+                <div>Aktualisiert am 26. März 2026, 10:32 Uhr</div>
+                <button>Zusammenfassen</button>
+              </div>
+              <div>Bundesministerin Karin Prien spricht über die steigende geschlechtsspezifische Gewalt und die Notwendigkeit angepasster Gesetze. Trotz neuer Gesetze betont sie, dass allein Gesetzgebung nicht ausreicht, da Gewalt in den Köpfen beginnt.</div>
+              <div>Diese Zusammenfassung wurde mithilfe von Künstlicher Intelligenz erstellt. Vereinzelt kann es dabei zu Fehlern kommen.</div>
+              <div>Fanden Sie die Zusammenfassung hilfreich?</div>
+              <div>Diese Audioversion wurde künstlich erzeugt.</div>
+              <div>Die Audioversion dieses Artikels wurde künstlich erzeugt.</div>
+              <div>Wir entwickeln dieses Angebot stetig weiter und freuen uns über Ihr Feedback.</div>
+              <div>
+                <h2>"Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so" – Seite 1</h2>
+                <div>{zeit_body_blocks[0]}</div>
+                <div>{zeit_body_blocks[1]}</div>
+                <div>{zeit_body_blocks[2]}</div>
+              </div>
+              <aside aria-label="Mehr zum Thema: Sexualisierte Gewalt">
+                <div>Mehr zum Thema</div>
+              </aside>
+              <div>
+                <div>{zeit_body_blocks[3]}</div>
+                <div>{zeit_body_blocks[4]}</div>
+              </div>
+              <div>
+                <h2>{zeit_body_blocks[5]}</h2>
+                <div>{zeit_body_blocks[6]}</div>
+              </div>
+              <aside aria-label="Newsletteranmeldung">
+                <div>Newsletter</div>
+              </aside>
+              <div>
+                <h2>{zeit_body_blocks[7]}</h2>
+                <div>{zeit_body_blocks[8]}</div>
+                <div>{zeit_body_blocks[9]}</div>
+                <div>{zeit_body_blocks[10]}</div>
+              </div>
+              <nav aria-label="Seitennavigation">
+                <div>Link kopieren</div>
+              </nav>
+            </article>
+          </main>
+          <div id="comments">
+            <h3>1 Kommentar</h3>
+            <blockquote>Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so.</blockquote>
+            <div>Exakt mein Gedankengang, wenn ich "Es sind immer Männer" lese. Vielen Dank.</div>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    article = extractor.extract(
+        url="https://www.zeit.de/2026/14/karin-prien-bundesfrauenministerin-gewalthilfegesetz-digitale-gewalt",
+        final_url="https://archive.is/FEzwe",
+        html=html,
+    )
+
+    assert article is not None
+    assert article.trace == ("archive_replay",)
+    assert article.source == "DIE ZEIT"
+    assert article.body_text.startswith(
+        'Karin Prien: "Ich möchte wirklich davor warnen zu sagen: Alle Männer sind so"'
+    )
+    assert "Menschen wollen in Partnerschaft leben, trotz allem." in article.body_text
+    assert "Diese Zusammenfassung wurde" not in article.body_text
+    assert "Diese Audioversion wurde künstlich erzeugt." not in article.body_text
+    assert "Mehr zum Thema" not in article.body_text
+    assert "Newsletter" not in article.body_text
+    assert "1 Kommentar" not in article.body_text
+    assert "Exakt mein Gedankengang" not in article.body_text
+    assert '"Die Krise der Männlichkeit ist nicht neu"' in article.body_text
+    assert '"Sie brauchen mehr männliche Vorbilder"' in article.body_text
+
+
+def test_archive_replay_extraction_stops_before_comments() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <article>
+            <div>
+              <h1>Policy Interview</h1>
+            </div>
+            <div>
+              <div>Paragraph one contains enough detail and context to look like a real article paragraph with complete prose and reporting tone.</div>
+              <div>Paragraph two adds more reporting detail, explanation, and concrete examples so the extractor clearly sees complete article content.</div>
+              <div>Paragraph three extends the interview with additional context, named subjects, and complete sentences that preserve narrative continuity.</div>
+            </div>
+            <nav aria-label="Seitennavigation">
+              <div>Link kopieren</div>
+            </nav>
+          </article>
+        </main>
+        <div id="comments">
+          <h3>1 Kommentar</h3>
+          <div>Exakt mein Gedankengang.</div>
+        </div>
+      </body>
+    </html>
+    """
+
+    replay_text = _extract_archive_replay_text(BeautifulSoup(html, "lxml"))
+
+    assert replay_text is not None
+    assert "Paragraph three extends the interview" in replay_text
+    assert "1 Kommentar" not in replay_text
+    assert "Exakt mein Gedankengang" not in replay_text

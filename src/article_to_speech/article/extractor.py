@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from readability import Document
 
+from article_to_speech.article.archive_replay import contains_archive_noise, is_archive_url
 from article_to_speech.article.extractor_support import (
     _extract_archive_replay_text,
     _extract_archive_story_text,
@@ -17,7 +18,10 @@ from article_to_speech.article.extractor_support import (
     _extract_document_headline,
     _normalize_text,
     _preferred_source,
+    guess_title_from_body,
     has_paywall_signals,
+    iter_article_objects,
+    load_possible_json,
     sanitize_html,
     trim_extracted_body,
 )
@@ -74,9 +78,11 @@ class ArticleExtractor:
 
 
 def _best_attempt(soup: BeautifulSoup, html: str, final_url: str) -> ExtractionAttempt | None:
+    archive_story = _archive_story_attempt(soup)
+    archive_replay = _archive_replay_attempt(soup)
     attempts = [
-        _archive_story_attempt(soup),
-        _archive_replay_attempt(soup),
+        archive_story,
+        archive_replay,
         _extract_ld_json_article_body(soup),
         _extract_json_article_body(soup),
         _extract_container_text(soup, "article", ["p", "h2", "li"], "article_tag"),
@@ -87,6 +93,22 @@ def _best_attempt(soup: BeautifulSoup, html: str, final_url: str) -> ExtractionA
     usable = [attempt for attempt in attempts if attempt and _looks_complete(attempt.body_text)]
     if not usable:
         return None
+    if is_archive_url(final_url):
+        archive_usable = [
+            attempt
+            for attempt in (archive_story, archive_replay)
+            if attempt and _looks_complete(attempt.body_text)
+        ]
+        clean_archive = [
+            attempt for attempt in archive_usable if not contains_archive_noise(attempt.body_text)
+        ]
+        if clean_archive:
+            return max(clean_archive, key=lambda attempt: len(attempt.body_text))
+        clean_usable = [
+            attempt for attempt in usable if not contains_archive_noise(attempt.body_text)
+        ]
+        if clean_usable:
+            usable = clean_usable
     return max(usable, key=lambda attempt: len(attempt.body_text))
 
 
@@ -109,8 +131,8 @@ def _extract_ld_json_article_body(soup: BeautifulSoup) -> ExtractionAttempt | No
         text = block.string or block.text
         if not text:
             continue
-        for payload in _load_possible_json(text):
-            for article_object in _iter_article_objects(payload):
+        for payload in load_possible_json(text):
+            for article_object in iter_article_objects(payload):
                 body_text = article_object.get("articleBody")
                 if isinstance(body_text, str):
                     cleaned = _normalize_text(body_text)
@@ -184,37 +206,6 @@ def _looks_complete(text: str) -> bool:
     return not any(marker in lowered for marker in PAYWALL_MARKERS)
 
 
-def _guess_title_from_body(text: str) -> str | None:
-    first_line = text.splitlines()[0].strip() if text else ""
-    if 8 <= len(first_line) <= 140:
-        return first_line
-    return None
-
-
-def _load_possible_json(text: str) -> list[object]:
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(payload, list):
-        return payload
-    return [payload]
-
-
-def _iter_article_objects(payload: object) -> list[dict[str, object]]:
-    if isinstance(payload, dict):
-        payload_type = payload.get("@type")
-        if payload_type in {"NewsArticle", "Article", "ReportageNewsArticle"}:
-            return [payload]
-        graph = payload.get("@graph")
-        if isinstance(graph, list):
-            objects: list[dict[str, object]] = []
-            for item in graph:
-                objects.extend(_iter_article_objects(item))
-            return objects
-    return []
-
-
 def _build_resolved_article(
     url: str,
     final_url: str,
@@ -227,7 +218,7 @@ def _build_resolved_article(
     paywalled: bool,
 ) -> ResolvedArticle:
     metadata_title = headline or metadata["title"]
-    title = metadata_title or _guess_title_from_body(best.body_text) or final_url
+    title = metadata_title or guess_title_from_body(best.body_text) or final_url
     return ResolvedArticle(
         canonical_url=url,
         original_url=url,

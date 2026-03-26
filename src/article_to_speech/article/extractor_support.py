@@ -1,22 +1,14 @@
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-ARCHIVE_REPLAY_NOISE_MARKERS = (
-    "zur merkliste hinzufügen",
-    "artikel anhören",
-    "weitere optionen zum teilen",
-    "bild vergrößern",
-    "foto:",
-    "dieser artikel gehört zum angebot von spiegel+",
-    "mehr zum thema",
-    "debatte",
-    "diskutieren sie hier",
-    "startseite feedback",
+from article_to_speech.article.archive_replay import (
+    extract_archive_replay_text,
 )
 
 
@@ -125,22 +117,11 @@ def _extract_archive_story_text(soup: BeautifulSoup) -> str | None:
 
 
 def _extract_archive_replay_text(soup: BeautifulSoup) -> str | None:
-    content = soup.select_one("#CONTENT")
-    if content is None:
-        return None
-    article = _select_archive_replay_article(content)
-    if article is None:
-        return None
-    body_container = _select_archive_replay_body_container(article)
-    if body_container is None:
-        return None
-    parts = []
-    for child in body_container.find_all(recursive=False):
-        text = _normalize_text(child.get_text(" ", strip=True))
-        if _looks_like_archive_replay_body_block(text):
-            parts.append(text)
-    cleaned = _normalize_text("\n\n".join(parts))
-    return cleaned or None
+    return extract_archive_replay_text(
+        soup,
+        normalize_text=_normalize_text,
+        extract_document_headline=_extract_document_headline,
+    )
 
 
 def _normalize_text(text: str) -> str:
@@ -150,6 +131,40 @@ def _normalize_text(text: str) -> str:
         if cleaned:
             lines.append(cleaned)
     return "\n\n".join(lines).strip()
+
+
+def guess_title_from_body(text: str) -> str | None:
+    """Return a plausible title candidate from the first extracted line."""
+    first_line = text.splitlines()[0].strip() if text else ""
+    if 8 <= len(first_line) <= 140:
+        return first_line
+    return None
+
+
+def load_possible_json(text: str) -> list[object]:
+    """Parse a JSON blob that may contain a single payload or a list."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, list):
+        return payload
+    return [payload]
+
+
+def iter_article_objects(payload: object) -> list[dict[str, object]]:
+    """Walk a JSON-LD payload and return article-like objects."""
+    if isinstance(payload, dict):
+        payload_type = payload.get("@type")
+        if payload_type in {"NewsArticle", "Article", "ReportageNewsArticle"}:
+            return [payload]
+        graph = payload.get("@graph")
+        if isinstance(graph, list):
+            objects: list[dict[str, object]] = []
+            for item in graph:
+                objects.extend(iter_article_objects(item))
+            return objects
+    return []
 
 
 def _append_archive_summary(parts: list[str], article: Tag, headline: str) -> None:
@@ -187,48 +202,6 @@ def _looks_like_story_paragraph(text: str) -> bool:
     if any(marker in lowered for marker in noise_markers):
         return False
     return any(punctuation in text for punctuation in (".", "?", "!", ";"))
-
-
-def _select_archive_replay_article(content: Tag) -> Tag | None:
-    articles = content.find_all("article")
-    if not articles:
-        return None
-    return max(
-        articles,
-        key=lambda article: len(_normalize_text(article.get_text(" ", strip=True)).split()),
-    )
-
-
-def _select_archive_replay_body_container(article: Tag) -> Tag | None:
-    best_container: Tag | None = None
-    best_score = (0, 0)
-    for container in article.find_all("div"):
-        direct_children = container.find_all(recursive=False)
-        if not direct_children:
-            continue
-        body_blocks = [
-            _normalize_text(child.get_text(" ", strip=True))
-            for child in direct_children
-            if _looks_like_archive_replay_body_block(
-                _normalize_text(child.get_text(" ", strip=True))
-            )
-        ]
-        score = (len(body_blocks), sum(len(block.split()) for block in body_blocks))
-        if score > best_score:
-            best_container = container
-            best_score = score
-    if best_score[0] < 3:
-        return None
-    return best_container
-
-
-def _looks_like_archive_replay_body_block(text: str) -> bool:
-    if len(text.split()) < 20:
-        return False
-    lowered = text.lower()
-    if any(marker in lowered for marker in ARCHIVE_REPLAY_NOISE_MARKERS):
-        return False
-    return any(punctuation in text for punctuation in (".", "?", "!", ";", ":"))
 
 
 def has_paywall_signals(soup: BeautifulSoup, html: str, final_url: str) -> bool:
