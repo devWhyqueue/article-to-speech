@@ -106,13 +106,65 @@ def audio_hook_script() -> str:
     """Return the browser bootstrap script that tracks played audio sources."""
     return """
     (() => {
-      window.__atsAudioState = { sources: [] };
+      window.__atsAudioState = { sources: [], events: [] };
+      const remember = (entry) => {
+        try {
+          window.__atsAudioState.events.push({
+            src: entry?.src || "",
+            event: entry?.event || "",
+            currentTime: entry?.currentTime || 0,
+            paused: Boolean(entry?.paused),
+            ended: Boolean(entry?.ended),
+            timestamp: Date.now(),
+          });
+          if (window.__atsAudioState.events.length > 200) {
+            window.__atsAudioState.events = window.__atsAudioState.events.slice(-200);
+          }
+        } catch (error) {
+          console.warn("audio event hook failed", error);
+        }
+      };
+      const bindAudio = (audio) => {
+        if (!audio || audio.__atsBound) {
+          return;
+        }
+        audio.__atsBound = true;
+        for (const eventName of ["play", "playing", "pause", "ended", "loadedmetadata", "timeupdate"]) {
+          audio.addEventListener(eventName, () => {
+            remember({
+              src: audio.currentSrc || audio.src || "",
+              event: eventName,
+              currentTime: audio.currentTime || 0,
+              paused: audio.paused,
+              ended: audio.ended,
+            });
+          });
+        }
+      };
+      const scan = () => {
+        for (const audio of document.querySelectorAll("audio")) {
+          bindAudio(audio);
+        }
+      };
+      scan();
+      new MutationObserver(scan).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
       const originalPlay = HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play = function(...args) {
         try {
+          bindAudio(this);
           window.__atsAudioState.sources.push({
             src: this.currentSrc || this.src || "",
             timestamp: Date.now(),
+          });
+          remember({
+            src: this.currentSrc || this.src || "",
+            event: "play-call",
+            currentTime: this.currentTime || 0,
+            paused: this.paused,
+            ended: this.ended,
           });
         } catch (error) {
           console.warn("audio hook failed", error);

@@ -7,11 +7,13 @@ import pytest
 
 from article_to_speech.browser.capture import collect_browser_snapshot
 from article_to_speech.browser.launch import (
+    _browser_process_env,
     browser_args,
     build_browser_context_options,
     normalize_profile_shutdown_state,
     setup_browser_args,
 )
+from article_to_speech.browser.ui import is_project_page_url
 from article_to_speech.core.config import Settings
 
 
@@ -81,6 +83,8 @@ def test_browser_args_hide_crash_restore_bubble() -> None:
 
     assert "--disable-session-crashed-bubble" in args
     assert "--hide-crash-restore-bubble" in args
+    assert "--disable-gpu" in args
+    assert "--no-sandbox" in args
 
 
 def test_setup_browser_args_launch_manual_profile_window(tmp_path) -> None:
@@ -94,6 +98,22 @@ def test_setup_browser_args_launch_manual_profile_window(tmp_path) -> None:
     assert "--no-sandbox" in args
     assert "--disable-software-rasterizer" in args
     assert args[-1] == "https://chatgpt.com/"
+
+
+def test_browser_process_env_removes_dbus_noise(monkeypatch) -> None:
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/test")
+
+    env = _browser_process_env()
+
+    assert "DBUS_SESSION_BUS_ADDRESS" not in env
+    assert env["NO_AT_BRIDGE"] == "1"
+
+
+def test_is_project_page_url_supports_current_chatgpt_project_routes() -> None:
+    assert is_project_page_url("https://chatgpt.com/project/abc123") is True
+    assert is_project_page_url("https://chatgpt.com/g/g-p-example-articles") is True
+    assert is_project_page_url("https://chatgpt.com/g/g-p-example-articles/c/conv-123") is True
+    assert is_project_page_url("https://chatgpt.com/") is False
 
 
 def test_normalize_profile_shutdown_state_marks_profile_clean(tmp_path) -> None:

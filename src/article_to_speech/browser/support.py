@@ -1,34 +1,24 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import re
-from collections.abc import Callable
 from pathlib import Path
 
-from playwright.async_api import BrowserContext, Page, Response
+from playwright.async_api import BrowserContext, Page
 
 from article_to_speech.browser.capture import (
     artifact_dir,
     artifact_file_name,
     collect_browser_snapshot,
-    maybe_capture_response_bytes,
     write_diagnostics,
 )
 from article_to_speech.browser.ui import locate_read_aloud_button
 from article_to_speech.core.exceptions import AuthenticationRequiredError, BrowserAutomationError
 from article_to_speech.core.models import AudioArtifact, BrowserStepLog
-from article_to_speech.infra.audio import concat_mp3_files, write_base64_audio
-from article_to_speech.infra.browser_audio_files import (
-    _download_audio_sources,
-    _write_network_payloads,
-)
-from article_to_speech.infra.browser_audio_runtime import (
-    _extract_audio_sources_from_page,
-    _record_audio_stream,
-    _wait_for_audio_completion,
-)
+from article_to_speech.infra.audio import concat_mp3_files
+from article_to_speech.infra.browser_audio_files import _download_audio_sources
+from article_to_speech.infra.browser_audio_runtime import _extract_audio_sources_from_page
 
 LOGIN_TEXT_PATTERN = re.compile(
     r"\b(log in|sign up|continue with google|continue with apple)\b",
@@ -36,6 +26,8 @@ LOGIN_TEXT_PATTERN = re.compile(
 )
 LOGGER = logging.getLogger(__name__)
 _CLOUDFLARE_COOKIE_NAMES = ("cf_clearance", "__cf_bm", "__cflb")
+_UI_SETTLE_MS = 5_000
+_AUDIO_SOURCE_RETRIES = 60
 
 
 async def clear_chatgpt_challenge_cookies(context: BrowserContext) -> None:
@@ -91,19 +83,6 @@ async def ensure_authenticated(page: Page) -> None:
         )
 
 
-def response_listener(
-    response_payloads: list[tuple[str, str, bytes]],
-    capture_tasks: list[asyncio.Task[None]],
-) -> Callable[[Response], None]:
-    """Create a response hook that captures audio-like payloads asynchronously."""
-
-    def _listener(response: Response) -> None:
-        task = asyncio.create_task(maybe_capture_response_bytes(response, response_payloads))
-        capture_tasks.append(task)
-
-    return _listener
-
-
 async def wait_for_assistant_response(page: Page, previous_count: int) -> None:
     """Wait until a newly submitted assistant response is fully rendered."""
     await page.wait_for_function(
@@ -126,7 +105,7 @@ async def wait_for_assistant_response(page: Page, previous_count: int) -> None:
         """,
         timeout=600_000,
     )
-    await page.wait_for_timeout(1_500)
+    await page.wait_for_timeout(_UI_SETTLE_MS)
 
 
 def final_artifact(
@@ -156,16 +135,13 @@ def final_artifact(
 async def capture_audio_chunk(
     *,
     page: Page,
-    downloads: list,
-    response_payloads: list[tuple[str, str, bytes]],
     diagnostics_dir: Path,
     chunk_index: int,
 ) -> list[Path]:
     """Capture one narrated audio chunk from the active assistant response."""
-    downloads.clear()
-    response_payloads.clear()
     chunk_dir = diagnostics_dir / f"chunk-{chunk_index:02d}"
     chunk_dir.mkdir(parents=True, exist_ok=True)
+    await page.wait_for_timeout(_UI_SETTLE_MS)
     assistant_turn = page.locator("section[data-turn='assistant']").last
     await assistant_turn.hover(timeout=10_000)
     read_aloud_button = await locate_read_aloud_button(assistant_turn, page)
@@ -173,39 +149,23 @@ async def capture_audio_chunk(
         raise BrowserAutomationError("Could not find the ChatGPT read-aloud control.")
     LOGGER.info("chatgpt_audio_control_found")
     await read_aloud_button.click(timeout=10_000)
+    await page.wait_for_timeout(_UI_SETTLE_MS)
     LOGGER.info("chatgpt_audio_capture_wait_start")
-    await _wait_for_audio_completion(page, response_payloads, downloads)
+    sources = await _extract_audio_sources_from_page(page, retries=_AUDIO_SOURCE_RETRIES)
+    if not sources:
+        raise BrowserAutomationError(
+            "ChatGPT started playback but exposed no downloadable audio source."
+        )
     LOGGER.info(
         "chatgpt_audio_capture_wait_done",
-        extra={
-            "context": {
-                "downloads": len(downloads),
-                "response_payloads": len(response_payloads),
-            }
-        },
+        extra={"context": {"audio_sources": len(sources)}},
     )
-    direct_audio_sources = await _extract_audio_sources_from_page(page)
-    if direct_audio_sources:
-        direct_paths = await _download_audio_sources(page, chunk_dir, direct_audio_sources)
-        if direct_paths:
-            return direct_paths
-    for download in downloads:
-        suggested_name = download.suggested_filename or f"chunk-{chunk_index}.bin"
-        download_path = chunk_dir / suggested_name
-        await download.save_as(download_path)
-    if downloads:
-        return [
-            chunk_dir / (download.suggested_filename or f"chunk-{chunk_index}.bin")
-            for download in downloads
-        ]
-    network_paths = _write_network_payloads(chunk_dir, response_payloads)
-    if network_paths:
-        return network_paths
-    recorded = await _record_audio_stream(page)
-    if recorded:
-        output_path = chunk_dir / "fallback-stream.webm"
-        return [write_base64_audio(output_path, recorded, "capture_stream").path]
-    raise BrowserAutomationError("Failed to capture any audio bytes from the ChatGPT browser flow.")
+    paths = await _download_audio_sources(page, chunk_dir, sources)
+    if paths:
+        return paths
+    raise BrowserAutomationError(
+        "ChatGPT exposed audio sources, but downloading the played audio failed."
+    )
 
 
 async def monitor_setup_challenge(page: Page, diagnostics_dir: Path) -> None:
@@ -234,8 +194,6 @@ async def monitor_setup_challenge(page: Page, diagnostics_dir: Path) -> None:
                     )
                 ],
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as error:  # noqa: BLE001
             if page.is_closed() or _is_closed_page_error(error):
                 return

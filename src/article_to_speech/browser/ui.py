@@ -3,16 +3,35 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin
 
-from playwright.async_api import BrowserContext, Error, Locator, Page
+from playwright.async_api import Error, Locator, Page
 
-_AUDIO_LABEL_PATTERN = re.compile(
-    r"read aloud|listen|play response|play audio|play message|voice|audio|speak",
-    re.I,
-)
+from article_to_speech.core.browser_runtime import is_project_page_url
+
+_AUDIO_LABEL_PATTERN = re.compile(r"read aloud|listen|play response|play audio|play message", re.I)
 _NON_AUDIO_LABEL_PATTERN = re.compile(
-    r"copy|share|thumb|regenerate|edit|good response|bad response",
+    r"copy|share|thumb|regenerate|edit|good response|bad response|voice|dictat|record",
     re.I,
 )
+_NEW_CHAT_SELECTORS = [
+    "a[data-testid='create-new-chat-button']",
+    "button[data-testid='create-new-chat-button']",
+    "a[href$='/new']",
+    "button[aria-label*='New chat']",
+    "a[href='/']",
+]
+_AUDIO_BUTTON_SELECTORS = [
+    "button[data-testid*='audio']",
+    "[role='menuitem'][data-testid*='audio']",
+    "button[aria-label*='Read aloud']",
+    "button[aria-label*='Listen']",
+    "button[aria-label*='Play audio']",
+    "button[aria-label*='Play response']",
+    "[role='menuitem'][aria-label*='Read aloud']",
+    "[role='menuitem'][aria-label*='Listen']",
+    "[role='menuitem'][aria-label*='Play audio']",
+    "[role='menuitem'][aria-label*='Play response']",
+]
+_UI_SETTLE_MS = 5_000
 
 
 async def click_text(page: Page, label: str) -> bool:
@@ -116,30 +135,33 @@ async def fill_editor(editor: Locator, value: str) -> None:
 
 async def locate_read_aloud_button(turn: Locator, page: Page) -> Locator | None:
     """Locate the read-aloud control for the latest assistant message."""
-    for hover_target in (turn.locator("[data-message-author-role='assistant']").last, turn):
-        if await hover_target.count():
-            await hover_target.hover(timeout=10_000)
-            await page.wait_for_timeout(500)
-        button = await _matching_audio_button(turn)
-        if button is not None:
-            return button
-        menu_item = page.get_by_role("menuitem", name=_AUDIO_LABEL_PATTERN)
-        if await menu_item.count():
-            return menu_item.first
-    more_actions = turn.get_by_role("button", name=re.compile(r"more actions", re.I))
-    if await more_actions.count():
-        await more_actions.first.click(timeout=10_000)
-        await page.wait_for_timeout(750)
-        menu_item = page.get_by_role("menuitem", name=_AUDIO_LABEL_PATTERN)
-        if await menu_item.count():
-            return menu_item.first
+    for _ in range(3):
+        for hover_target in (turn.locator("[data-message-author-role='assistant']").last, turn):
+            if await hover_target.count():
+                await hover_target.hover(timeout=10_000)
+                await page.wait_for_timeout(1_000)
+            menu_item = await _open_more_actions_and_find_read_aloud(turn, page)
+            if menu_item is not None:
+                return menu_item
+            button = await _matching_audio_button(turn)
+            if button is not None:
+                return button
+            page_button = await _matching_audio_button(page.locator("main"))
+            if page_button is not None:
+                return page_button
+            selector_button = await _matching_audio_selector(page)
+            if selector_button is not None:
+                return selector_button
+        await settle_chatgpt_ui(page)
     return None
 
 
 async def _matching_audio_button(turn: Locator) -> Locator | None:
-    buttons = turn.locator("button")
+    buttons = turn.locator("button, [role='button'], [role='menuitem']")
     for index in range(await buttons.count()):
         button = buttons.nth(index)
+        if not await button.is_visible():
+            continue
         label_parts = [
             await button.get_attribute("aria-label") or "",
             await button.get_attribute("title") or "",
@@ -154,50 +176,71 @@ async def _matching_audio_button(turn: Locator) -> Locator | None:
     return None
 
 
+async def _matching_audio_selector(page: Page) -> Locator | None:
+    for selector in _AUDIO_BUTTON_SELECTORS:
+        locator = page.locator(selector)
+        if await locator.count() and await locator.first.is_visible():
+            return locator.first
+    for role in ("button", "menuitem"):
+        locator = page.get_by_role(role, name=_AUDIO_LABEL_PATTERN)
+        if await locator.count() and await locator.first.is_visible():
+            return locator.first
+    return None
+
+
+async def _open_more_actions_and_find_read_aloud(turn: Locator, page: Page) -> Locator | None:
+    more_actions = turn.get_by_role("button", name=re.compile(r"more actions", re.I))
+    if not await more_actions.count():
+        more_actions = page.get_by_role("button", name=re.compile(r"more actions", re.I))
+    if not await more_actions.count():
+        return None
+    await more_actions.last.click(timeout=10_000)
+    await page.wait_for_timeout(1_500)
+    for role in ("menuitem", "button"):
+        read_aloud = page.get_by_role(role, name=re.compile(r"^read aloud$|^listen$", re.I))
+        if await read_aloud.count() and await read_aloud.first.is_visible():
+            return read_aloud.first
+    return await _matching_audio_selector(page)
+
+
 async def open_new_chat(page: Page) -> bool:
     """Open a fresh ChatGPT chat from the current UI."""
-    selectors = [
-        "a[data-testid='create-new-chat-button']",
-        "button[data-testid='create-new-chat-button']",
-        "a[href='/']",
-    ]
-    if await click_maybe_resilient(page, selectors):
+    if await click_maybe_resilient(page, _NEW_CHAT_SELECTORS):
         await page.wait_for_load_state("domcontentloaded", timeout=60_000)
-        await page.wait_for_timeout(1_500)
+        await settle_chatgpt_ui(page)
         return True
     if await click_text(page, "New chat"):
         await page.wait_for_load_state("domcontentloaded", timeout=60_000)
-        await page.wait_for_timeout(1_500)
+        await settle_chatgpt_ui(page)
+        return True
+    project_root_url = _project_root_url(page.url)
+    if project_root_url is not None and page.url != project_root_url:
+        await page.goto(project_root_url, wait_until="domcontentloaded", timeout=60_000)
+        await settle_chatgpt_ui(page)
         return True
     return False
 
 
-async def create_project(page: Page, project_name: str) -> None:
-    """Create the target ChatGPT project when it does not already exist."""
-    if not await click_maybe(
-        page, ["[data-testid='project-modal-trigger']"]
-    ) and not await click_text(page, "New project"):
-        raise Error(f"Unable to find or create ChatGPT project '{project_name}'.")
-    await page.wait_for_timeout(1_000)
-    filled = await fill_first(
-        page,
-        [
-            "input[placeholder*='Project']",
-            "input[name='name']",
-            "input[type='text']",
-        ],
-        project_name,
-    )
-    if not filled:
-        raise Error("Project creation dialog appeared but no project name input was found.")
-    if not await click_text(page, "Create"):
-        raise Error("Failed to confirm ChatGPT project creation.")
-    await page.wait_for_timeout(2_000)
+async def open_workspace_root(page: Page) -> bool:
+    """Return the active ChatGPT tab to the root workspace without spawning a new tab."""
+    if page.url.rstrip("/") == "https://chatgpt.com":
+        return True
+    if await click_text(page, "ChatGPT"):
+        await page.wait_for_load_state("domcontentloaded", timeout=60_000)
+        await settle_chatgpt_ui(page)
+        return page.url.rstrip("/") == "https://chatgpt.com"
+    if await click_maybe_resilient(page, ["a[href='/']", "nav a[href='/']"]):
+        await page.wait_for_load_state("domcontentloaded", timeout=60_000)
+        await settle_chatgpt_ui(page)
+        return page.url.rstrip("/") == "https://chatgpt.com"
+    return False
 
 
-async def get_or_create_page(context: BrowserContext) -> Page:
-    """Reuse the first persistent page or open a new one."""
-    return context.pages[0] if context.pages else await context.new_page()
+async def has_project_chat_controls(page: Page) -> bool:
+    """Return whether the current project page exposes a composer or new-chat control."""
+    if await find_editor(page) is not None:
+        return True
+    return await any_visible(page, _NEW_CHAT_SELECTORS)
 
 
 async def submit_prompt(page: Page) -> None:
@@ -207,33 +250,62 @@ async def submit_prompt(page: Page) -> None:
         ["button[data-testid='send-button']", "button[aria-label*='Send']"],
     ):
         await page.keyboard.press("Enter")
-    await page.wait_for_timeout(1_000)
+    await settle_chatgpt_ui(page)
 
 
 async def goto_project_page(page: Page, project_name: str, retries: int = 5) -> bool:
     """Open the named ChatGPT project if it becomes visible in the current UI."""
+    project_name_pattern = re.compile(re.escape(project_name), re.I)
     for _ in range(retries):
         project_locators = (
+            page.locator("a[href*='/g/g-p-']").filter(has_text=project_name_pattern),
             page.locator("a[href*='/project/']").filter(has_text=project_name),
+            page.locator("[data-sidebar-item='true']").filter(has_text=project_name_pattern),
             page.locator("a[data-sidebar-item='true']").filter(has_text=project_name),
-            page.get_by_role("link", name=project_name, exact=True),
-            page.get_by_role("button", name=project_name, exact=True),
+            page.get_by_role("link", name=project_name_pattern),
+            page.get_by_role("button", name=project_name_pattern),
         )
         for locator in project_locators:
             if not await locator.count():
                 continue
-            href = await locator.first.get_attribute("href")
-            if href:
+            if await locator.first.is_visible():
+                await locator.first.click(timeout=10_000)
+                await page.wait_for_load_state("domcontentloaded", timeout=60_000)
+            else:
+                href = await locator.first.get_attribute("href")
+                if not href:
+                    continue
                 await page.goto(
                     urljoin(page.url, href),
                     wait_until="domcontentloaded",
                     timeout=60_000,
                 )
-            else:
-                await locator.first.click(timeout=10_000)
-                await page.wait_for_load_state("domcontentloaded", timeout=60_000)
-            await page.wait_for_timeout(1_000)
-            if "/project" in page.url:
+            await settle_chatgpt_ui(page)
+            if is_project_page_url(page.url):
                 return True
-        await page.wait_for_timeout(1_000)
+        await settle_chatgpt_ui(page)
     return False
+
+
+def _project_root_url(url: str) -> str | None:
+    if "/g/g-p-" in url:
+        return url.partition("/c/")[0].rstrip("/")
+    if "/project/" in url:
+        prefix, _, suffix = url.partition("/project/")
+        project_id = suffix.split("/", 1)[0]
+        if project_id:
+            return f"{prefix}/project/{project_id}"
+    return None
+
+
+async def any_visible(page: Page, selectors: list[str]) -> bool:
+    for selector in selectors:
+        locator = page.locator(selector)
+        if await locator.count() and await locator.first.is_visible():
+            return True
+    return False
+
+
+async def settle_chatgpt_ui(page: Page) -> None:
+    """Pause between sensitive ChatGPT interactions so the UI can fully settle."""
+    await page.wait_for_timeout(_UI_SETTLE_MS)

@@ -7,35 +7,43 @@ import signal
 from contextlib import suppress
 from pathlib import Path
 
-from playwright.async_api import Download, Page, async_playwright
+from playwright.async_api import Page, async_playwright
 
 from article_to_speech.browser.capture import artifact_dir, audio_hook_script, write_diagnostics
 from article_to_speech.browser.launch import (
     browser_stealth_script,
+    clear_shared_browser_debug_port,
     hold_browser_profile,
-    launch_chatgpt_context,
+    open_chatgpt_context,
     setup_browser_args,
+    write_shared_browser_debug_port,
 )
 from article_to_speech.browser.support import (
     capture_audio_chunk,
     clear_chatgpt_challenge_cookies,
     ensure_authenticated,
     final_artifact,
-    response_listener,
     wait_for_assistant_response,
     wait_for_challenge_to_clear,
 )
 from article_to_speech.browser.ui import (
     click_maybe_resilient,
-    click_text,
-    create_project,
     fill_editor,
     find_editor,
-    get_or_create_page,
     goto_project_page,
+    has_project_chat_controls,
     open_new_chat,
+    open_workspace_root,
     submit_prompt,
     wait_for_editor,
+)
+from article_to_speech.core.browser_runtime import (
+    browser_process_env,
+    ensure_reusable_workspace_page,
+    free_local_port,
+    get_or_create_page,
+    is_project_page_url,
+    wait_for_project_workspace_ready,
 )
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import AuthenticationRequiredError, BrowserAutomationError
@@ -55,7 +63,6 @@ class ChatGPTBrowserAutomation:
         self._settings = settings
 
     async def bootstrap_login(self) -> None:
-        """Open the persistent ChatGPT browser profile for one-time manual login."""
         with hold_browser_profile(self._settings.browser_profile_dir):
             async with async_playwright() as playwright:
                 executable_path = Path(playwright.chromium.executable_path)
@@ -66,24 +73,16 @@ class ChatGPTBrowserAutomation:
         article: ResolvedArticle,
         requests: list[NarrationRequest],
     ) -> AudioArtifact:
-        """Generate narrated article audio through the ChatGPT web UI."""
         diagnostics_dir = artifact_dir(
             self._settings.diagnostics_dir, article.title, article.final_url
         )
         step_logs: list[BrowserStepLog] = []
         chunk_outputs: list[Path] = []
-
-        with hold_browser_profile(self._settings.browser_profile_dir):
-            async with async_playwright() as playwright:
-                context = await launch_chatgpt_context(playwright, self._settings)
+        async with async_playwright() as playwright:
+            async with open_chatgpt_context(playwright, self._settings) as context:
                 page = await get_or_create_page(context)
                 await page.add_init_script(audio_hook_script())
                 await page.add_init_script(browser_stealth_script())
-                downloads: list[Download] = []
-                response_payloads: list[tuple[str, str, bytes]] = []
-                capture_tasks: list[asyncio.Task[None]] = []
-                context.on("response", response_listener(response_payloads, capture_tasks))
-                page.on("download", lambda download: downloads.append(download))
 
                 try:
                     await self._open_chatgpt(page, step_logs)
@@ -91,8 +90,6 @@ class ChatGPTBrowserAutomation:
                         await self._send_prompt(page, request, step_logs)
                         raw_paths = await capture_audio_chunk(
                             page=page,
-                            downloads=downloads,
-                            response_payloads=response_payloads,
                             diagnostics_dir=diagnostics_dir,
                             chunk_index=request.chunk_index,
                         )
@@ -104,10 +101,6 @@ class ChatGPTBrowserAutomation:
                             convert_to_mp3(raw_path, mp3_path)
                             chunk_outputs.append(mp3_path)
 
-                    for task in capture_tasks:
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*capture_tasks, return_exceptions=True)
                     return final_artifact(
                         article.title,
                         self._settings.artifacts_dir,
@@ -120,49 +113,44 @@ class ChatGPTBrowserAutomation:
                 except Exception as error:  # noqa: BLE001
                     await write_diagnostics(page, diagnostics_dir, step_logs)
                     raise BrowserAutomationError(str(error)) from error
-                finally:
-                    await context.close()
 
     async def _open_chatgpt(self, page: Page, step_logs: list[BrowserStepLog]) -> None:
-        await self._record(step_logs, "open_home", "Navigating to ChatGPT")
-        await clear_chatgpt_challenge_cookies(page.context)
-        await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60_000)
-        await ensure_authenticated(page)
+        step_logs.append(BrowserStepLog(step="open_home", detail="Navigating to ChatGPT"))
+        page = await ensure_reusable_workspace_page(
+            page,
+            clear_cookies=clear_chatgpt_challenge_cookies,
+            ensure_authenticated=ensure_authenticated,
+        )
         await self._open_project(page, step_logs)
         await self._ensure_project_chat(page, step_logs)
 
     async def _open_project(self, page: Page, step_logs: list[BrowserStepLog]) -> None:
-        await self._record(step_logs, "open_project", self._settings.chatgpt_project_name)
-        if self._settings.chatgpt_project_url is not None:
-            await page.goto(
-                self._settings.chatgpt_project_url, wait_until="domcontentloaded", timeout=60_000
-            )
-            await page.wait_for_timeout(1_000)
-            if "/project" in page.url:
-                return
-        await page.wait_for_timeout(6_000)
-        if await goto_project_page(page, self._settings.chatgpt_project_name):
-            return
-        await click_maybe_resilient(
-            page,
-            ["button[aria-label*='Sidebar']", "button[aria-label*='Open sidebar']"],
+        step_logs.append(
+            BrowserStepLog(step="open_project", detail=self._settings.chatgpt_project_name)
         )
-        await page.wait_for_timeout(500)
-        if await goto_project_page(page, self._settings.chatgpt_project_name):
-            return
-        if await click_text(page, "Projects"):
-            await page.wait_for_timeout(1_000)
+        await page.bring_to_front()
+        await page.wait_for_load_state("domcontentloaded", timeout=60_000)
+        await page.wait_for_timeout(5_000)
+        await open_workspace_root(page)
+        await page.wait_for_timeout(3_000)
+        for attempt in range(2):
             if await goto_project_page(page, self._settings.chatgpt_project_name):
-                return
-        if await click_maybe_resilient(page, ["[data-testid='project-modal-trigger']"]):
-            await page.wait_for_timeout(1_000)
-            if await goto_project_page(page, self._settings.chatgpt_project_name):
-                return
-        await create_project(page, self._settings.chatgpt_project_name)
+                if await self._wait_for_project_ready(page):
+                    return
+            if attempt == 0:
+                await click_maybe_resilient(
+                    page,
+                    ["button[aria-label*='Sidebar']", "button[aria-label*='Open sidebar']"],
+                )
+                await page.wait_for_timeout(2_000)
+        raise BrowserAutomationError(
+            f"Could not find the existing ChatGPT project '{self._settings.chatgpt_project_name}' "
+            "from the authenticated workspace tab."
+        )
 
     async def _ensure_project_chat(self, page: Page, step_logs: list[BrowserStepLog]) -> None:
-        await self._record(step_logs, "ensure_chat", "Using project-local composer")
-        if "/project" not in page.url:
+        step_logs.append(BrowserStepLog(step="ensure_chat", detail="Using project-local composer"))
+        if not is_project_page_url(page.url):
             raise BrowserAutomationError(
                 "ChatGPT did not remain inside the configured project page."
             )
@@ -171,11 +159,16 @@ class ChatGPTBrowserAutomation:
             await page.goto(page.url, wait_until="domcontentloaded", timeout=60_000)
             if not await wait_for_challenge_to_clear(page):
                 raise BrowserAutomationError("ChatGPT project page stayed on a Cloudflare check.")
+        if not await self._wait_for_project_ready(page):
+            raise BrowserAutomationError(
+                "ChatGPT project page did not finish loading into a stable authenticated state."
+            )
+        await page.wait_for_timeout(3_000)
         if await wait_for_editor(page, retries=8):
             return
         if not await open_new_chat(page):
             raise BrowserAutomationError("Could not open a new project chat in ChatGPT.")
-        if await wait_for_editor(page):
+        if await self._wait_for_project_ready(page) and await wait_for_editor(page, retries=15):
             return
         raise BrowserAutomationError("Could not open a project chat composer in ChatGPT.")
 
@@ -185,10 +178,11 @@ class ChatGPTBrowserAutomation:
         request: NarrationRequest,
         step_logs: list[BrowserStepLog],
     ) -> None:
-        await self._record(
-            step_logs,
-            "send_prompt",
-            f"Submitting chunk {request.chunk_index}/{request.chunk_count}",
+        step_logs.append(
+            BrowserStepLog(
+                step="send_prompt",
+                detail=f"Submitting chunk {request.chunk_index}/{request.chunk_count}",
+            )
         )
         assistant_messages = page.locator("[data-message-author-role='assistant']")
         previous_count = await assistant_messages.count()
@@ -199,15 +193,25 @@ class ChatGPTBrowserAutomation:
         await submit_prompt(page)
         await wait_for_assistant_response(page, previous_count)
 
-    async def _record(self, step_logs: list[BrowserStepLog], step: str, detail: str) -> None:
-        step_logs.append(BrowserStepLog(step=step, detail=detail))
+    async def _wait_for_project_ready(self, page: Page) -> bool:
+        for _ in range(20):
+            if is_project_page_url(page.url) and await has_project_chat_controls(page):
+                return True
+            if await wait_for_project_workspace_ready(
+                page, self._settings.chatgpt_project_name, retries=1
+            ):
+                return True
+            await page.wait_for_timeout(1_000)
+        return False
 
     async def _run_manual_setup_browser(self, executable_path: Path) -> None:
-        """Launch a real Chromium window for manual login against the shared profile."""
+        debug_port = free_local_port()
         command = [
             os.fspath(executable_path),
             *setup_browser_args(self._settings.browser_profile_dir, "https://chatgpt.com/"),
+            f"--remote-debugging-port={debug_port}",
         ]
+        write_shared_browser_debug_port(self._settings.browser_profile_dir, debug_port)
         LOGGER.info(
             "setup_browser_ready",
             extra={
@@ -219,7 +223,7 @@ class ChatGPTBrowserAutomation:
         )
         process = await asyncio.create_subprocess_exec(
             *command,
-            env=_manual_browser_env(),
+            env=browser_process_env(),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -231,16 +235,9 @@ class ChatGPTBrowserAutomation:
                 await asyncio.wait_for(process.wait(), timeout=10)
             raise
         finally:
+            clear_shared_browser_debug_port(self._settings.browser_profile_dir)
             if process.returncode is None:
                 with suppress(ProcessLookupError):
                     process.send_signal(signal.SIGTERM)
                 with suppress(asyncio.TimeoutError, ProcessLookupError):
                     await asyncio.wait_for(process.wait(), timeout=10)
-
-
-def _manual_browser_env() -> dict[str, str]:
-    """Drop desktop-session variables that only produce noise inside the container browser."""
-    env = dict(os.environ)
-    env.pop("DBUS_SESSION_BUS_ADDRESS", None)
-    env.setdefault("NO_AT_BRIDGE", "1")
-    return env
