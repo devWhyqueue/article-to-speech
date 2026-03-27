@@ -87,6 +87,38 @@ def test_extracts_nyt_archive_snapshot_as_markdown() -> None:
     assert "<div" not in article.body_text
 
 
+def test_extracts_spiegel_archive_snapshot_ctofu_as_markdown() -> None:
+    article = ArticleExtractor().extract(
+        url=(
+            "https://www.spiegel.de/karriere/"
+            "hirnforschung-warum-pausen-das-gehirn-zu-besseren-ideen-fuehren-"
+            "a-4d7f82de-4d58-4bf0-b641-aa74510afd0d"
+        ),
+        final_url="https://archive.is/CToFU",
+        html=_fixture("spiegel_CToFU.html"),
+    )
+
+    assert article is not None
+    assert article.source == "DER SPIEGEL"
+    assert article.title == "Hirnforschung: Warum Pausen das Gehirn zu besseren Ideen führen"
+    assert (
+        article.subtitle
+        == "Der Neurowissenschaftler Joseph Jebelli erforscht das Ruhenetzwerk im Gehirn – "
+        "und erklärt, wie wir auf brillante Ideen kommen. Ein Gespräch über Leere, "
+        "Tagträume und warum die meisten von uns es ihrem Hirn grundlos schwer machen."
+    )
+    assert article.author == "Stefan Boes"
+    assert article.published_at == "2025-08-01"
+    assert "SPIEGEL: Herr Jebelli" in article.body_text
+    assert "Jebelli: Es gibt viele Wege, dem Gehirn Erholung zu verschaffen" in article.body_text
+    assert "SPIEGEL: Wie sähe ein gehirnfreundlicher Arbeitstag aus?" in article.body_text
+    assert (
+        "Irgendwann habe ich begriffen, dass ich meinem Gehirn das Leben "
+        "grundlos schwer gemacht habe."
+    ) in article.body_text
+    assert "DER SPIEGEL Zur Startseite" not in article.body_text
+
+
 def test_extracts_sz_archive_snapshot_as_markdown() -> None:
     article = ArticleExtractor().extract(
         url="https://www.sueddeutsche.de/meinung/usa-trump-iran-krieg-kommentar-1.1234567",

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Final
 
+from bs4.element import Tag
 from dateutil import parser as date_parser
 
 from article_to_speech.article.source_detection import SupportedSource
@@ -140,8 +141,92 @@ def normalize_archive_text(text: str) -> str:
     return cleaned.replace('"“', "“").replace('"”', "”")
 
 
+def _contains_zeit_page_heading(article: Tag) -> bool:
+    return any(
+        node.name in HEADING_TAGS
+        and "seite" in normalize_archive_text(node.get_text(" ", strip=True)).lower()
+        for node in article.find_all(HEADING_TAGS)
+    )
+
+
+def _is_stop_block(node: Tag, text: str, config: SourceParserConfig) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in config.stop_markers) and (
+        node.name in HEADING_TAGS or len(text.split()) <= 4
+    )
+
+
+def _is_metadata_line(text: str, author: str | None) -> bool:
+    lowered = text.lower()
+    if author and text == author:
+        return True
+    return any(
+        lowered.startswith(prefix)
+        for prefix in (
+            "von ",
+            "by ",
+            "kommentar von ",
+            "interview:",
+            "aktualisiert am",
+            "26.03.2026",
+            "26. märz 2026",
+            "march 26, 2026",
+        )
+    )
+
+
+def _looks_like_body_paragraph(text: str) -> bool:
+    return len(text.split()) >= 12 and any(mark in text for mark in (".", "?", "!", "”", '"'))
+
+
+def _looks_like_caption(text: str) -> bool:
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("foto:", "credit...", "/ ap", "/ dpa", "/ sf")):
+        return True
+    return text.endswith(("AP", "dpa", "picture alliance")) and len(text.split()) <= 20
+
+
+def _contains_noise(text: str, config: SourceParserConfig) -> bool:
+    return any(marker in text.lower() for marker in config.noise_markers)
+
+
+def _render_markdown_block(node: Tag, text: str) -> str:
+    if node.name in HEADING_TAGS and 2 <= len(text.split()) <= 16:
+        return f"## {text}"
+    if node.name in QUOTE_TAGS:
+        return f"> {text}"
+    return text
+
+
+def _extract_spiegel_subtitle_candidate(
+    article: Tag,
+    title: str,
+    config: SourceParserConfig,
+) -> str | None:
+    heading = next(
+        (
+            node
+            for node in article.find_all("h2")
+            if len(normalize_archive_text(node.get_text(" ", strip=True)).split()) >= 8
+        ),
+        None,
+    )
+    if heading is None:
+        return None
+    for node in heading.find_all_next(("div", "p")):
+        if article not in node.parents:
+            continue
+        text = normalize_archive_text(node.get_text(" ", strip=True))
+        if not text or text == title or _contains_noise(text, config) or _looks_like_caption(text):
+            continue
+        if len(text.split()) >= 10 and any(mark in text for mark in '.!?”“"'):
+            return text
+    return None
+
+
 def _normalize_date(raw_value: str) -> str:
     cleaned = raw_value.strip()
+    dayfirst = bool(re.match(r"\d{1,2}\.\d{1,2}\.\d{4}", cleaned))
     for german, english in {
         "januar": "January",
         "februar": "February",
@@ -159,4 +244,4 @@ def _normalize_date(raw_value: str) -> str:
         cleaned = re.sub(german, english, cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.replace("Uhr", "").replace(" ET", "").strip()
     cleaned = re.sub(r",\s*(\d{1,2})\.(\d{2})$", r", \1:\2", cleaned)
-    return date_parser.parse(cleaned, fuzzy=True).date().isoformat()
+    return date_parser.parse(cleaned, fuzzy=True, dayfirst=dayfirst).date().isoformat()
