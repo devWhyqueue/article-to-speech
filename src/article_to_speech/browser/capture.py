@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
-from playwright.async_api import Error, Page, Response
+from playwright.async_api import Error, Page, Response, TimeoutError
 
 from article_to_speech.core.models import BrowserStepLog
 
@@ -89,11 +89,13 @@ async def maybe_capture_response_bytes(
 ) -> None:
     """Capture response bytes for audio-like network responses."""
     content_type = response.headers.get("content-type", "")
-    audio_like = "/backend-api/synthesize?" in response.url.lower() or content_type.startswith(
-        "audio/"
-    ) or any(
-        token in response.url.lower()
-        for token in ("audio", "voice", "readaloud", "synthesize", ".mp3", ".m4a", ".wav")
+    audio_like = (
+        "/backend-api/synthesize?" in response.url.lower()
+        or content_type.startswith("audio/")
+        or any(
+            token in response.url.lower()
+            for token in ("audio", "voice", "readaloud", "synthesize", ".mp3", ".m4a", ".wav")
+        )
     )
     if not audio_like:
         return
@@ -193,6 +195,26 @@ def extension_from_audio(url: str, content_type: str) -> str:
 def audio_hook_script() -> str:
     """Return the browser bootstrap script that tracks played audio sources."""
     return _AUDIO_HOOK_SCRIPT
+
+
+async def recover_audio_capture_page(page: Page, settle_ms: int) -> None:
+    """Reload the conversation so read-aloud can be re-opened once."""
+    await page.reload(wait_until="domcontentloaded", timeout=60_000)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15_000)
+    except TimeoutError:
+        await page.wait_for_timeout(2_000)
+    await page.wait_for_function(
+        """
+        () => {
+            const turn = document.querySelector("section[data-turn='assistant']:last-of-type");
+            if (!turn) return false;
+            return !turn.querySelector("[aria-busy='true']");
+        }
+        """,
+        timeout=60_000,
+    )
+    await page.wait_for_timeout(settle_ms)
 
 
 def artifact_dir(root: Path, title: str, source_url: str | None = None) -> Path:

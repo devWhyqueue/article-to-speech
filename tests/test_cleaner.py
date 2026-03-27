@@ -99,9 +99,14 @@ def test_cleaner_chunks_long_article_into_multiple_requests() -> None:
 
     assert len(requests) > 1
     assert "Part 1 of" in requests[0].prompt_text
+    assert (
+        "Output the full cleaned text of this part as a direct continuation of the article."
+        in requests[0].prompt_text
+    )
+    assert "return only the cleaned passage." in requests[0].prompt_text
     assert "Example" in requests[0].prompt_text
     assert "Subtitle" in requests[0].prompt_text
-    assert all("do not read markdown punctuation literally" in request.prompt_text for request in requests)
+    assert all("<text>" not in request.prompt_text for request in requests)
     assert all(
         len(request.prompt_text) <= formatter.max_chatgpt_message_chars for request in requests
     )
@@ -111,7 +116,7 @@ def test_cleaner_chunks_long_article_into_multiple_requests() -> None:
 
 def test_cleaner_prefers_paragraph_boundaries_when_chunking() -> None:
     formatter = NarrationFormatter()
-    formatter.max_chatgpt_message_chars = 420
+    formatter.max_chatgpt_message_chars = 460
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",

@@ -161,10 +161,10 @@ class NarrationFormatter:
         return (
             "The user provided article text for a private accessibility read-aloud. "
             f"This is Part {part_number} of {part_count}. "
-            "Read it as a direct continuation of the same article. "
-            "Do not re-introduce the article or repeat earlier sections. "
-            "Preserve wording, drop obvious noise, and do not read markdown punctuation literally.\n\n"
-            f"<text>\n{text}\n</text>"
+            "Output the full cleaned text of this part as a direct continuation of the article. "
+            "Preserve the wording, remove obvious noise, keep paragraph breaks, and return only "
+            "the cleaned passage.\n\n"
+            f"{text}"
         )
 
     def _single_text_budget(self) -> int:

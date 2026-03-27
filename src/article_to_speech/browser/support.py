@@ -11,6 +11,7 @@ from article_to_speech.browser.capture import (
     artifact_dir,
     artifact_file_name,
     collect_browser_snapshot,
+    recover_audio_capture_page,
     write_diagnostics,
 )
 from article_to_speech.browser.ui_audio import locate_read_aloud_button
@@ -144,38 +145,53 @@ async def capture_audio_chunk(
     chunk_index: int,
 ) -> list[Path]:
     """Capture one narrated audio chunk from the active assistant response."""
-    downloads.clear()
-    response_payloads.clear()
     chunk_dir = diagnostics_dir / f"chunk-{chunk_index:02d}"
     chunk_dir.mkdir(parents=True, exist_ok=True)
-    await page.wait_for_timeout(_UI_SETTLE_MS)
-    assistant_turn = page.locator("section[data-turn='assistant']").last
-    read_aloud_button = await locate_read_aloud_button(assistant_turn, page)
-    if read_aloud_button is None:
-        raise BrowserAutomationError("Could not find the ChatGPT read-aloud control.")
-    LOGGER.info("chatgpt_audio_control_found")
-    await read_aloud_button.click(timeout=10_000)
-    LOGGER.info("chatgpt_audio_capture_wait_start")
-    await _wait_for_audio_response_payload(
-        page,
-        response_payloads,
-        timeout_ms=_FIRST_AUDIO_RESPONSE_TIMEOUT_MS,
-    )
-    await _stop_audio_playback(page)
-    network_paths = _write_network_payloads(chunk_dir, response_payloads)
-    LOGGER.info(
-        "chatgpt_audio_capture_wait_done",
-        extra={
-            "context": {
-                "downloads": len(downloads),
-                "response_payloads": len(response_payloads),
-                "written_paths": len(network_paths),
-            }
-        },
-    )
-    if network_paths:
-        return network_paths
-    raise BrowserAutomationError("Failed to capture the ChatGPT synthesize response.")
+    last_error: Exception | None = None
+    for attempt in range(2):
+        downloads.clear()
+        response_payloads.clear()
+        try:
+            await page.wait_for_timeout(_UI_SETTLE_MS)
+            assistant_turn = page.locator("section[data-turn='assistant']").last
+            read_aloud_button = await locate_read_aloud_button(assistant_turn, page)
+            if read_aloud_button is None:
+                raise BrowserAutomationError("Could not find the ChatGPT read-aloud control.")
+            LOGGER.info("chatgpt_audio_control_found")
+            await read_aloud_button.click(timeout=10_000)
+            LOGGER.info("chatgpt_audio_capture_wait_start")
+            await _wait_for_audio_response_payload(
+                page,
+                response_payloads,
+                timeout_ms=_FIRST_AUDIO_RESPONSE_TIMEOUT_MS,
+            )
+            await _stop_audio_playback(page)
+            network_paths = _write_network_payloads(chunk_dir, response_payloads)
+            LOGGER.info(
+                "chatgpt_audio_capture_wait_done",
+                extra={
+                    "context": {
+                        "downloads": len(downloads),
+                        "response_payloads": len(response_payloads),
+                        "written_paths": len(network_paths),
+                        "attempt": attempt + 1,
+                    }
+                },
+            )
+            if network_paths:
+                return network_paths
+            raise BrowserAutomationError("Failed to capture the ChatGPT synthesize response.")
+        except Exception as error:  # noqa: BLE001
+            last_error = error
+            if attempt != 0:
+                break
+            LOGGER.warning(
+                "chatgpt_audio_capture_retry",
+                extra={"context": {"chunk_index": chunk_index, "error": str(error)}},
+            )
+            await recover_audio_capture_page(page, _UI_SETTLE_MS)
+    assert last_error is not None
+    raise last_error
 
 
 async def _stop_audio_playback(page: Page) -> None:
