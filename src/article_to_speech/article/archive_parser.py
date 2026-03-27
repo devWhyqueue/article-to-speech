@@ -169,7 +169,7 @@ def _extract_markdown_body(
     parts: list[str] = []
     seen: set[str] = set()
     started = False
-    zeit_ready = config.source.slug != "zeit"
+    zeit_ready = config.source.slug != "zeit" or not _contains_zeit_page_heading(article)
     for node in article.find_all(BODY_TAGS):
         if any(isinstance(child, Tag) and child.name in BODY_TAGS for child in node.children):
             continue
@@ -197,6 +197,14 @@ def _extract_markdown_body(
             seen.add(rendered)
             parts.append(rendered)
     return "\n\n".join(parts).strip() or None
+
+
+def _contains_zeit_page_heading(article: Tag) -> bool:
+    return any(
+        node.name in HEADING_TAGS
+        and "seite" in normalize_archive_text(node.get_text(" ", strip=True)).lower()
+        for node in article.find_all(HEADING_TAGS)
+    )
 
 
 def _is_metadata_line(text: str, author: str | None) -> bool:

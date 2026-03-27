@@ -132,3 +132,45 @@ def test_extracts_faz_archive_snapshot_as_markdown() -> None:
     assert "Zur App" not in article.body_text
     assert "Mehr zum Thema" not in article.body_text
     assert "<div" not in article.body_text
+
+
+def test_extracts_zeit_archive_without_page_heading() -> None:
+    article = ArticleExtractor().extract(
+        url="https://www.zeit.de/wirtschaft/2026-03/altersvorsorge-riester-rente-etf-depot-faq",
+        final_url="https://archive.is/example",
+        html="""
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <title>Private Altersvorsorge: So funktioniert die neue private Altersvorsorge | DIE ZEIT</title>
+  </head>
+  <body>
+    <main>
+      <article>
+        <header>
+          <h1>Private Altersvorsorge: So funktioniert die neue private Altersvorsorge</h1>
+        </header>
+        <div>Ab 2027 startet eine neue staatliche Förderung für die Altersvorsorge.</div>
+        <h3>Artikelzusammenfassung</h3>
+        <p>Diese Zusammenfassung wurde mithilfe von Künstlicher Intelligenz erstellt.</p>
+        <p>
+          Die Reform der privaten Altersvorsorge soll ein altes Problem lösen: Viele
+          Riester-Verträge waren teuer, kompliziert und renditeschwach.
+        </p>
+        <h2>Was sich 2027 ändert</h2>
+        <p>Das neue Modell setzt stärker auf kostengünstige Depots und klarere Regeln.</p>
+      </article>
+    </main>
+  </body>
+</html>
+""",
+    )
+
+    assert article is not None
+    assert article.title == "Private Altersvorsorge: So funktioniert die neue private Altersvorsorge"
+    assert article.subtitle == "Ab 2027 startet eine neue staatliche Förderung für die Altersvorsorge."
+    assert (
+        "Die Reform der privaten Altersvorsorge soll ein altes Problem lösen" in article.body_text
+    )
+    assert "## Was sich 2027 ändert" in article.body_text
+    assert "Diese Zusammenfassung wurde" not in article.body_text
