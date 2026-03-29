@@ -9,8 +9,9 @@ from article_to_speech.browser.launch import browser_args, browser_stealth_scrip
 from article_to_speech.core.config import Settings
 from article_to_speech.infra.archive_proxy import (
     ProxySettings,
-    archive_launch_proxies,
+    parse_proxy_settings,
     resolve_archive_proxy_urls,
+    write_cached_archive_proxy_urls,
 )
 
 ARCHIVE_BASE_URL = "https://archive.is/"
@@ -26,6 +27,7 @@ class BrowserPageFetcher:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._archive_proxy_urls_cache: tuple[str, ...] | None = None
+        self._archive_proxy_cache_path = self._settings.state_db_path.parent / "archive-proxies.txt"
 
     async def render_html(self, url: str) -> RenderedPage:
         """Render a page in Chromium and return the final DOM HTML."""
@@ -52,10 +54,13 @@ class BrowserPageFetcher:
         async with async_playwright() as playwright:
             last_error: Exception | None = None
             for archive_url in archive_lookup_urls(url):
-                for proxy in archive_launch_proxies(await self._archive_proxy_urls()):
+                for proxy_url in (*await self._archive_proxy_urls(), None):
+                    proxy = parse_proxy_settings(proxy_url) if proxy_url is not None else None
                     try:
                         return await self._render_archive_with_proxy(playwright, archive_url, proxy)
                     except Exception as error:  # noqa: BLE001
+                        if proxy_url is not None:
+                            self._drop_archive_proxy_url(proxy_url)
                         last_error = error
             if last_error is None:
                 raise TimeoutError("Archive render failed")
@@ -68,10 +73,24 @@ class BrowserPageFetcher:
             configured_urls=self._settings.archive_proxy_urls,
             proxy_list_url=self._settings.archive_proxy_list_url,
             user_agent=self._settings.http_user_agent,
-            cache_path=self._settings.state_db_path.parent / "archive-proxies.txt",
+            cache_path=self._archive_proxy_cache_path,
         )
         self._archive_proxy_urls_cache = proxy_urls
         return proxy_urls
+
+    def _drop_archive_proxy_url(self, proxy_url: str) -> None:
+        cached_proxy_urls = self._archive_proxy_urls_cache
+        if cached_proxy_urls is None or proxy_url not in cached_proxy_urls:
+            return
+        self._archive_proxy_urls_cache = tuple(
+            candidate_proxy_url
+            for candidate_proxy_url in cached_proxy_urls
+            if candidate_proxy_url != proxy_url
+        )
+        write_cached_archive_proxy_urls(
+            self._archive_proxy_cache_path,
+            self._archive_proxy_urls_cache,
+        )
 
     async def _render_archive_with_proxy(
         self,
