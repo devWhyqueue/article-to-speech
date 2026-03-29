@@ -142,7 +142,7 @@ async def archive_proxy_reaches_archive(proxy_url: str, *, user_agent: str) -> b
         return False
     if response.headers.get("X-Webshare-Reason") is not None:
         return False
-    return response.status_code < 500
+    return response.status_code < 400 and response.status_code != 429
 
 
 def redact_proxy_url(proxy_url: str) -> str:

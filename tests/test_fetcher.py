@@ -311,3 +311,34 @@ async def test_archive_proxy_reaches_archive_rejects_proxy_side_block(monkeypatc
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_archive_proxy_reaches_archive_rejects_rate_limited_proxy(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 429
+        headers: dict[str, str] = {}
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url: str) -> FakeResponse:
+            assert url == "https://archive.is/"
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.httpx.AsyncClient",
+        lambda **_: FakeClient(),
+    )
+
+    assert (
+        await archive_proxy_reaches_archive(
+            "http://user:pass@proxy.example:8080",
+            user_agent="test-agent",
+        )
+        is False
+    )
