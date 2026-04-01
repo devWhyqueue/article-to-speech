@@ -14,12 +14,12 @@ class ArticleResolutionError(ArticleToSpeechError):
     """Raised when article resolution cannot produce a full article."""
 
 
-class AuthenticationRequiredError(ArticleToSpeechError):
-    """Raised when the ChatGPT browser session is not authenticated."""
-
-
 class BrowserAutomationError(ArticleToSpeechError):
-    """Raised for ChatGPT browser automation failures."""
+    """Raised for browser automation failures."""
+
+
+class SpeechSynthesisError(ArticleToSpeechError):
+    """Raised when article text cannot be synthesized into audio."""
 
 
 class TelegramDeliveryError(ArticleToSpeechError):

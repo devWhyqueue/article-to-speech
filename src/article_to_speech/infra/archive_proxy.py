@@ -46,10 +46,11 @@ async def resolve_archive_proxy_urls(
 ) -> tuple[str, ...]:
     """Return reachable archive proxies from static config and an optional remote list."""
     cached_urls = load_cached_archive_proxy_urls(cache_path)
-    candidate_urls = dedupe_proxy_urls((*cached_urls, *configured_urls))
-    if candidate_urls:
+    if cached_urls:
+        return cached_urls
+    if configured_urls:
         working_urls = await filter_reachable_archive_proxy_urls(
-            candidate_urls,
+            dedupe_proxy_urls(configured_urls),
             user_agent=user_agent,
         )
         if working_urls:

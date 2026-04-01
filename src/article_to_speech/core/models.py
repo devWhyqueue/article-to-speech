@@ -47,9 +47,8 @@ class ResolvedArticle:
 
 
 @dataclass(slots=True, frozen=True)
-class NarrationRequest:
-    article: ResolvedArticle
-    prompt_text: str
+class NarrationChunk:
+    text: str
 
 
 @dataclass(slots=True, frozen=True)

@@ -7,23 +7,9 @@ services:
       - .env
     environment:
       APP_RUNTIME_DIR: /data
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-application-credentials.json
     command: ["run-bot"]
     volumes:
       - ./.runtime:/data
+      - ./gcp-service-account.json:/run/secrets/google-application-credentials.json:ro
     restart: unless-stopped
-
-  setup-browser:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    env_file:
-      - .env
-    environment:
-      APP_RUNTIME_DIR: /data
-    command: ["setup-browser-desktop"]
-    ports:
-      - "6080:6080"
-      - "5900:5900"
-    volumes:
-      - ./.runtime:/data
-    restart: "no"

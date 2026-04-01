@@ -5,7 +5,7 @@ import asyncio
 
 from article_to_speech.core.config import Settings
 from article_to_speech.core.logging_config import configure_logging
-from article_to_speech.service import run_bot, run_process_url, run_setup_browser
+from article_to_speech.service import run_bot, run_process_url
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,7 +14,6 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("run-bot", help="Run the Telegram long-polling bot.")
-    subparsers.add_parser("setup-browser", help="Open ChatGPT in the persistent browser profile.")
 
     process_parser = subparsers.add_parser(
         "process-url", help="Process a single URL and send audio to Telegram."
@@ -33,9 +32,6 @@ def main() -> int:
 
     if args.command == "run-bot":
         asyncio.run(run_bot(settings))
-        return 0
-    if args.command == "setup-browser":
-        asyncio.run(run_setup_browser(settings))
         return 0
     if args.command == "process-url":
         return asyncio.run(run_process_url(settings, args))

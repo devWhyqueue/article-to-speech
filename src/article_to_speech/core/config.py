@@ -38,25 +38,24 @@ def _read_env_file(env_path: Path) -> dict[str, str]:
 
 def _runtime_paths(base_dir: Path, values: dict[str, str]) -> tuple[Path, Path, Path, Path]:
     runtime_root = Path(values.get("APP_RUNTIME_DIR", base_dir / ".runtime")).expanduser()
-    browser_profile_dir = runtime_root / "profile"
     state_dir = runtime_root / "state"
     artifacts_dir = runtime_root / "artifacts"
     diagnostics_dir = runtime_root / "diagnostics"
-    for path in (browser_profile_dir, state_dir, artifacts_dir, diagnostics_dir):
+    for path in (state_dir, artifacts_dir, diagnostics_dir):
         path.mkdir(parents=True, exist_ok=True)
-    return runtime_root, browser_profile_dir, artifacts_dir, diagnostics_dir
+    return runtime_root, state_dir, artifacts_dir, diagnostics_dir
 
 
-def _required_values(values: dict[str, str]) -> tuple[str, int, str]:
+def _required_values(values: dict[str, str]) -> tuple[str, int, Path]:
     bot_token = _env_text(values, "TELEGRAM_BOT_TOKEN")
     allowed_chat_id = _env_text(values, "TELEGRAM_ALLOWED_CHAT_ID")
-    project_name = _env_text(values, "CHATGPT_PROJECT_NAME")
+    credentials_path = _env_text(values, "GOOGLE_APPLICATION_CREDENTIALS")
     missing = [
         key
         for key, value in (
             ("TELEGRAM_BOT_TOKEN", bot_token),
             ("TELEGRAM_ALLOWED_CHAT_ID", allowed_chat_id),
-            ("CHATGPT_PROJECT_NAME", project_name),
+            ("GOOGLE_APPLICATION_CREDENTIALS", credentials_path),
         )
         if value is None
     ]
@@ -65,28 +64,25 @@ def _required_values(values: dict[str, str]) -> tuple[str, int, str]:
         raise ConfigurationError(f"Missing required environment variables: {names}")
     assert bot_token is not None
     assert allowed_chat_id is not None
-    assert project_name is not None
+    assert credentials_path is not None
     return (
         bot_token,
         int(allowed_chat_id),
-        project_name,
+        Path(credentials_path).expanduser(),
     )
 
 
-def _browser_runtime_settings(values: dict[str, str]) -> tuple[str | None, bool]:
+def _browser_runtime_settings(values: dict[str, str]) -> bool:
     browser_display = values.get("DISPLAY")
-    return (
-        browser_display,
-        _env_flag(
-            values,
-            "CHATGPT_BROWSER_HEADLESS",
-            default=browser_display is None,
-        ),
+    return _env_flag(
+        values,
+        "BROWSER_HEADLESS",
+        default=browser_display is None,
     )
 
 
 def _default_browser_locale(values: dict[str, str]) -> str:
-    raw_locale = _env_text(values, "CHATGPT_BROWSER_LOCALE") or _env_text(values, "LANG")
+    raw_locale = _env_text(values, "BROWSER_LOCALE") or _env_text(values, "LANG")
     if raw_locale is None:
         return "en-US"
     normalized = raw_locale.split(".", 1)[0]
@@ -97,15 +93,7 @@ def _default_browser_locale(values: dict[str, str]) -> str:
 
 
 def _default_browser_timezone(values: dict[str, str]) -> str | None:
-    return _env_text(values, "CHATGPT_BROWSER_TIMEZONE") or _env_text(values, "TZ")
-
-
-def _chatgpt_proxy_url(values: dict[str, str]) -> str | None:
-    return _env_text(values, "CHATGPT_PROXY_URL")
-
-
-def _chatgpt_project_url(values: dict[str, str]) -> str | None:
-    return _env_text(values, "CHATGPT_PROJECT_URL")
+    return _env_text(values, "BROWSER_TIMEZONE") or _env_text(values, "TZ")
 
 
 def _archive_proxy_urls(values: dict[str, str]) -> tuple[str, ...]:
@@ -122,45 +110,37 @@ def _archive_proxy_list_url(values: dict[str, str]) -> str | None:
 class SettingsKwargs(TypedDict):
     telegram_bot_token: str
     telegram_allowed_chat_id: int
-    chatgpt_project_name: str
+    google_application_credentials: Path
     runtime_root: Path
-    browser_profile_dir: Path
     state_db_path: Path
     artifacts_dir: Path
     diagnostics_dir: Path
-    browser_display: str | None
-    chatgpt_browser_headless: bool
+    browser_headless: bool
     browser_locale: str
     browser_timezone: str | None
-    chatgpt_proxy_url: str | None
-    chatgpt_project_url: str | None
     archive_proxy_urls: tuple[str, ...]
     archive_proxy_list_url: str | None
 
 
 def _settings_kwargs(base_dir: Path) -> SettingsKwargs:
     values = {**_read_env_file(base_dir / ".env"), **os.environ}
-    bot_token, allowed_chat_id, project_name = _required_values(values)
-    runtime_root, browser_profile_dir, artifacts_dir, diagnostics_dir = _runtime_paths(
+    bot_token, allowed_chat_id, credentials_path = _required_values(values)
+    runtime_root, state_dir, artifacts_dir, diagnostics_dir = _runtime_paths(
         base_dir,
         values,
     )
-    browser_display, chatgpt_browser_headless = _browser_runtime_settings(values)
+    browser_headless = _browser_runtime_settings(values)
     return {
         "telegram_bot_token": bot_token,
         "telegram_allowed_chat_id": allowed_chat_id,
-        "chatgpt_project_name": project_name,
+        "google_application_credentials": credentials_path,
         "runtime_root": runtime_root,
-        "browser_profile_dir": browser_profile_dir,
-        "state_db_path": runtime_root / "state" / "jobs.sqlite3",
+        "state_db_path": state_dir / "jobs.sqlite3",
         "artifacts_dir": artifacts_dir,
         "diagnostics_dir": diagnostics_dir,
-        "browser_display": browser_display,
-        "chatgpt_browser_headless": chatgpt_browser_headless,
+        "browser_headless": browser_headless,
         "browser_locale": _default_browser_locale(values),
         "browser_timezone": _default_browser_timezone(values),
-        "chatgpt_proxy_url": _chatgpt_proxy_url(values),
-        "chatgpt_project_url": _chatgpt_project_url(values),
         "archive_proxy_urls": _archive_proxy_urls(values),
         "archive_proxy_list_url": _archive_proxy_list_url(values),
     }
@@ -170,18 +150,14 @@ def _settings_kwargs(base_dir: Path) -> SettingsKwargs:
 class Settings:
     telegram_bot_token: str
     telegram_allowed_chat_id: int
-    chatgpt_project_name: str
+    google_application_credentials: Path
     runtime_root: Path
-    browser_profile_dir: Path
     state_db_path: Path
     artifacts_dir: Path
     diagnostics_dir: Path
-    browser_display: str | None
-    chatgpt_browser_headless: bool
+    browser_headless: bool
     browser_locale: str
     browser_timezone: str | None
-    chatgpt_proxy_url: str | None
-    chatgpt_project_url: str | None
     archive_proxy_urls: tuple[str, ...]
     archive_proxy_list_url: str | None
     http_user_agent: str = (

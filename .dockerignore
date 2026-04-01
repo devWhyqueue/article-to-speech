@@ -12,3 +12,4 @@ __pycache__
 *.pyo
 htmlcov
 coverage.xml
+gcp-service-account.json

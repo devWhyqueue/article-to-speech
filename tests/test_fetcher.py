@@ -196,9 +196,7 @@ async def test_resolve_archive_proxy_urls_uses_cache_before_downloading(
         *,
         user_agent: str,
     ) -> tuple[str, ...]:
-        assert user_agent == "test-agent"
-        assert proxy_urls == ("http://user1:pass1@cached:1111",)
-        return proxy_urls
+        raise AssertionError(f"filter should not run for cached proxies: {proxy_urls}")
 
     async def fake_download(proxy_list_url: str) -> tuple[str, ...]:
         raise AssertionError(f"download should not run for {proxy_list_url}")
@@ -226,7 +224,50 @@ async def test_resolve_archive_proxy_urls_refreshes_remote_list_when_cache_fails
     tmp_path: Path,
 ) -> None:
     cache_path = tmp_path / "archive-proxies.txt"
-    write_cached_archive_proxy_urls(cache_path, ("http://user1:pass1@cached:1111",))
+    write_cached_archive_proxy_urls(
+        cache_path,
+        (
+            "http://user1:pass1@cached:1111",
+            "http://user2:pass2@cached:2222",
+        ),
+    )
+
+    async def fake_filter(
+        proxy_urls: tuple[str, ...],
+        *,
+        user_agent: str,
+    ) -> tuple[str, ...]:
+        raise AssertionError(f"filter should not run for cached proxies: {proxy_urls}")
+
+    async def fake_download(proxy_list_url: str) -> tuple[str, ...]:
+        raise AssertionError(f"download should not run for {proxy_list_url}")
+
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.filter_reachable_archive_proxy_urls",
+        fake_filter,
+    )
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.download_archive_proxy_urls",
+        fake_download,
+    )
+
+    assert await resolve_archive_proxy_urls(
+        configured_urls=(),
+        proxy_list_url="https://proxy.example/list.txt",
+        user_agent="test-agent",
+        cache_path=cache_path,
+    ) == (
+        "http://user1:pass1@cached:1111",
+        "http://user2:pass2@cached:2222",
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_archive_proxy_urls_uses_downloaded_list_when_cache_is_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "archive-proxies.txt"
     filter_calls: list[tuple[str, ...]] = []
 
     async def fake_filter(
@@ -234,9 +275,8 @@ async def test_resolve_archive_proxy_urls_refreshes_remote_list_when_cache_fails
         *,
         user_agent: str,
     ) -> tuple[str, ...]:
+        assert user_agent == "test-agent"
         filter_calls.append(proxy_urls)
-        if proxy_urls == ("http://user1:pass1@cached:1111",):
-            return ()
         return ("http://user2:pass2@fresh:2222",)
 
     async def fake_download(proxy_list_url: str) -> tuple[str, ...]:
@@ -258,10 +298,7 @@ async def test_resolve_archive_proxy_urls_refreshes_remote_list_when_cache_fails
         user_agent="test-agent",
         cache_path=cache_path,
     ) == ("http://user2:pass2@fresh:2222",)
-    assert filter_calls == [
-        ("http://user1:pass1@cached:1111",),
-        ("http://user2:pass2@fresh:2222",),
-    ]
+    assert filter_calls == [("http://user2:pass2@fresh:2222",)]
     assert load_cached_archive_proxy_urls(cache_path) == ("http://user2:pass2@fresh:2222",)
 
 
@@ -332,18 +369,14 @@ def _settings(tmp_path: Path) -> Settings:
     return Settings(
         telegram_bot_token="token",
         telegram_allowed_chat_id=1,
-        chatgpt_project_name="Articles",
+        google_application_credentials=tmp_path / "service-account.json",
         runtime_root=runtime_root,
-        browser_profile_dir=runtime_root / "profile",
         state_db_path=runtime_root / "state" / "jobs.sqlite3",
         artifacts_dir=runtime_root / "artifacts",
         diagnostics_dir=runtime_root / "diagnostics",
-        browser_display=None,
-        chatgpt_browser_headless=True,
+        browser_headless=True,
         browser_locale="en-US",
         browser_timezone="Europe/Berlin",
-        chatgpt_proxy_url=None,
-        chatgpt_project_url=None,
         archive_proxy_urls=(),
         archive_proxy_list_url=None,
     )

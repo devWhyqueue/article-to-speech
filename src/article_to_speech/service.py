@@ -7,7 +7,6 @@ from dataclasses import replace
 
 from article_to_speech.article.cleaner import NarrationFormatter
 from article_to_speech.article.resolver import ArticleResolver
-from article_to_speech.browser.chatgpt import ChatGPTBrowserAutomation
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import (
     ArticleToSpeechError,
@@ -19,6 +18,7 @@ from article_to_speech.core.urls import extract_first_url, normalize_url
 from article_to_speech.infra.persistence import JobStore
 from article_to_speech.infra.telegram import TelegramBotClient
 from article_to_speech.telegram_support import build_caption, build_intermediate_article_link
+from article_to_speech.tts.google import GoogleTextToSpeechSynthesizer
 
 LOGGER = logging.getLogger(__name__)
 PROCESSING_REACTION_EMOJI = "⏳"
@@ -32,13 +32,13 @@ class ArticleToSpeechService:
         store: JobStore,
         telegram: TelegramBotClient,
         resolver: ArticleResolver,
-        browser: ChatGPTBrowserAutomation,
+        synthesizer: GoogleTextToSpeechSynthesizer,
         formatter: NarrationFormatter,
     ) -> None:
         self._store = store
         self._telegram = telegram
         self._resolver = resolver
-        self._browser = browser
+        self._synthesizer = synthesizer
         self._formatter = formatter
         self._serial_lock = asyncio.Lock()
 
@@ -70,8 +70,8 @@ class ArticleToSpeechService:
                 await self._send_article_link(
                     processing_job.chat_id, build_intermediate_article_link(article)
                 )
-                requests = self._formatter.build_requests(article)
-                audio = await self._browser.synthesize_article(article, requests)
+                chunks = self._formatter.build_chunks(article)
+                audio = await self._synthesizer.synthesize_article(article, chunks)
                 caption = build_caption(article)
                 await self._telegram.send_audio(processing_job.chat_id, audio.path, caption)
                 self._store.mark_succeeded(
@@ -193,7 +193,7 @@ def build_service(settings: Settings) -> ArticleToSpeechService:
         store=store,
         telegram=TelegramBotClient(settings.telegram_bot_token),
         resolver=ArticleResolver(settings),
-        browser=ChatGPTBrowserAutomation(settings),
+        synthesizer=GoogleTextToSpeechSynthesizer(settings),
         formatter=NarrationFormatter(),
     )
 
@@ -216,7 +216,3 @@ async def run_process_url(settings: Settings, args: argparse.Namespace) -> int:
         return 0 if result else 1
     finally:
         await service.close()
-
-
-async def run_setup_browser(settings: Settings) -> None:
-    await ChatGPTBrowserAutomation(settings).bootstrap_login()

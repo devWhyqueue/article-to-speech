@@ -5,7 +5,7 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from playwright.async_api import Browser, BrowserContext, Page, TimeoutError, async_playwright
 
-from article_to_speech.browser.launch import browser_args, browser_stealth_script
+from article_to_speech.core.browser_runtime import browser_args
 from article_to_speech.core.config import Settings
 from article_to_speech.infra.archive_proxy import (
     ProxySettings,
@@ -33,14 +33,13 @@ class BrowserPageFetcher:
         """Render a page in Chromium and return the final DOM HTML."""
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(
-                headless=self._settings.chatgpt_browser_headless,
+                headless=self._settings.browser_headless,
                 args=browser_args(),
             )
             try:
                 context = await self._new_context(browser)
                 try:
                     page = await context.new_page()
-                    await page.add_init_script(browser_stealth_script())
                     await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
                     await self._settle_page(page)
                     return RenderedPage(html=await page.content(), final_url=page.url)
@@ -99,7 +98,7 @@ class BrowserPageFetcher:
         proxy: ProxySettings | None,
     ) -> RenderedPage:
         launch_kwargs: dict[str, object] = {
-            "headless": self._settings.chatgpt_browser_headless,
+            "headless": self._settings.browser_headless,
             "args": browser_args(),
         }
         if proxy is not None:
@@ -109,7 +108,6 @@ class BrowserPageFetcher:
             context = await self._new_context(browser)
             try:
                 page = await context.new_page()
-                await page.add_init_script(browser_stealth_script())
                 await page.goto(archive_url, wait_until="domcontentloaded", timeout=45_000)
                 await self._settle_archive_page(page)
                 return RenderedPage(html=await page.content(), final_url=page.url)

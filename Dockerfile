@@ -12,7 +12,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
-    fluxbox \
     fonts-dejavu-core \
     fonts-liberation \
     fonts-noto-color-emoji \
@@ -38,13 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxfixes3 \
     libxrandr2 \
-    novnc \
-    procps \
     tini \
-    websockify \
     wget \
-    x11vnc \
-    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /uvx /bin/
@@ -59,7 +53,7 @@ RUN chmod 755 /app/docker/entrypoint.sh
 
 RUN uv sync --frozen --no-dev
 
-RUN mkdir -p /data/profile /data/state /data/artifacts /data/diagnostics
+RUN mkdir -p /data/state /data/artifacts /data/diagnostics
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker/entrypoint.sh"]
 CMD ["run-bot"]

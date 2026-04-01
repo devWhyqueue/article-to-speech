@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from article_to_speech.core.models import NarrationRequest, ResolvedArticle
+from article_to_speech.core.models import NarrationChunk, ResolvedArticle
 
 WHITESPACE_PATTERN = re.compile(r"[ \t]+")
 MULTI_NEWLINE_PATTERN = re.compile(r"\n{3,}")
@@ -24,8 +24,7 @@ HEADING_SENTINEL = "\u0000heading\u0000"
 
 
 class NarrationFormatter:
-    max_chatgpt_message_chars = 5_000
-    max_chunk_part_digits = 3
+    max_tts_input_bytes = 5_000
 
     def clean_article_text(self, article: ResolvedArticle) -> str:
         """Convert markdown article content into narration-friendly plain text."""
@@ -35,28 +34,21 @@ class NarrationFormatter:
             parts.append(body)
         return "\n\n".join(parts)
 
-    def build_requests(self, article: ResolvedArticle) -> list[NarrationRequest]:
-        """Build the ChatGPT narration request from the cleaned article body."""
+    def build_chunks(self, article: ResolvedArticle) -> list[NarrationChunk]:
+        """Build narration chunks sized for Google Cloud Text-to-Speech requests."""
         cleaned = self.clean_article_text(article)
-        if len(cleaned) <= self._single_text_budget():
-            return [NarrationRequest(article=article, prompt_text=self._single_prompt(cleaned))]
-        return self._build_chunked_requests(article)
+        if self._fits_budget(cleaned):
+            return [NarrationChunk(text=cleaned)]
+        return self._build_chunked_chunks(article)
 
-    def _build_chunked_requests(self, article: ResolvedArticle) -> list[NarrationRequest]:
+    def _build_chunked_chunks(self, article: ResolvedArticle) -> list[NarrationChunk]:
         intro_text = "\n\n".join(self._intro_parts(article)).strip()
         body = self._clean_body(article)
-        body_segments = self._split_body_segments(body, self._chunk_text_budget())
+        body_segments = self._split_body_segments(body, self.max_tts_input_bytes)
         chunk_texts = self._assemble_chunk_texts(
-            intro_text, body_segments, self._chunk_text_budget()
+            intro_text, body_segments, self.max_tts_input_bytes
         )
-        part_count = len(chunk_texts)
-        return [
-            NarrationRequest(
-                article=article,
-                prompt_text=self._chunk_prompt(chunk_text, part_number, part_count),
-            )
-            for part_number, chunk_text in enumerate(chunk_texts, start=1)
-        ]
+        return [NarrationChunk(text=chunk_text) for chunk_text in chunk_texts]
 
     def _assemble_chunk_texts(
         self,
@@ -69,15 +61,15 @@ class NarrationFormatter:
         remaining_segments = list(body_segments)
         if current and remaining_segments:
             first_candidate = f"{current}\n\n{remaining_segments[0]}"
-            if len(first_candidate) > text_budget:
-                available = text_budget - len(current) - 2
+            if not self._fits_budget(first_candidate, text_budget):
+                available = text_budget - _utf8_len(current) - _utf8_len("\n\n")
                 if available > 0:
                     split_segments = self._split_text_to_fit(remaining_segments.pop(0), available)
                     current = f"{current}\n\n{split_segments[0]}".strip()
                     remaining_segments = split_segments[1:] + remaining_segments
         for segment in remaining_segments:
             candidate = f"{current}\n\n{segment}".strip() if current else segment
-            if candidate and len(candidate) <= text_budget:
+            if candidate and self._fits_budget(candidate, text_budget):
                 current = candidate
                 continue
             if current:
@@ -92,14 +84,14 @@ class NarrationFormatter:
             return []
         segments: list[str] = []
         for paragraph in body.split("\n\n"):
-            if len(paragraph) <= text_budget:
+            if self._fits_budget(paragraph, text_budget):
                 segments.append(paragraph)
                 continue
             segments.extend(self._split_text_to_fit(paragraph, text_budget))
         return segments
 
     def _split_text_to_fit(self, text: str, text_budget: int) -> list[str]:
-        if len(text) <= text_budget:
+        if self._fits_budget(text, text_budget):
             return [text]
         sentences = _split_into_sentences(text)
         if len(sentences) == 1:
@@ -109,12 +101,12 @@ class NarrationFormatter:
         for sentence in sentences:
             sentence_parts = (
                 [sentence]
-                if len(sentence) <= text_budget
+                if self._fits_budget(sentence, text_budget)
                 else self._hard_split(sentence, text_budget)
             )
             for part in sentence_parts:
                 candidate = f"{current} {part}".strip() if current else part
-                if candidate and len(candidate) <= text_budget:
+                if candidate and self._fits_budget(candidate, text_budget):
                     current = candidate
                     continue
                 if current:
@@ -128,12 +120,12 @@ class NarrationFormatter:
         remaining = text.strip()
         chunks: list[str] = []
         while remaining:
-            if len(remaining) <= text_budget:
+            if self._fits_budget(remaining, text_budget):
                 chunks.append(remaining)
                 break
-            split_at = remaining.rfind(" ", 0, text_budget + 1)
+            split_at = _split_index_for_budget(remaining, text_budget)
             if split_at <= 0:
-                split_at = text_budget
+                split_at = max(1, _hard_split_index_for_budget(remaining, text_budget))
             chunks.append(remaining[:split_at].strip())
             remaining = remaining[split_at:].strip()
         return chunks
@@ -149,32 +141,9 @@ class NarrationFormatter:
             parts.append(article.subtitle)
         return parts
 
-    def _single_prompt(self, text: str) -> str:
-        return (
-            "The user provided article text for a private accessibility read-aloud. "
-            "Keep the title first, subtitle second when present, then the main text. "
-            "Preserve wording, drop obvious noise, and do not read markdown punctuation literally.\n\n"
-            f"<text>\n{text}\n</text>"
-        )
-
-    def _chunk_prompt(self, text: str, part_number: int, part_count: int) -> str:
-        return (
-            "The user provided article text for a private accessibility read-aloud. "
-            f"This is Part {part_number} of {part_count}. "
-            "Output the full cleaned text of this part as a direct continuation of the article. "
-            "Preserve the wording, remove obvious noise, keep paragraph breaks, and return only "
-            "the cleaned passage.\n\n"
-            f"{text}"
-        )
-
-    def _single_text_budget(self) -> int:
-        return self.max_chatgpt_message_chars - len(self._single_prompt(""))
-
-    def _chunk_text_budget(self) -> int:
-        max_part_number = int("9" * self.max_chunk_part_digits)
-        return self.max_chatgpt_message_chars - len(
-            self._chunk_prompt("", max_part_number, max_part_number)
-        )
+    def _fits_budget(self, text: str, text_budget: int | None = None) -> bool:
+        budget = self.max_tts_input_bytes if text_budget is None else text_budget
+        return _utf8_len(text) <= budget
 
 
 def _clean_markdown_body(body_text: str) -> str:
@@ -232,3 +201,24 @@ def _looks_like_sentence(text: str) -> bool:
 def _split_into_sentences(text: str) -> list[str]:
     parts = re.split(r"(?<=[.!?])\s+", text)
     return [part.strip() for part in parts if part.strip()]
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _split_index_for_budget(text: str, text_budget: int) -> int:
+    best_index = -1
+    for index, character in enumerate(text):
+        if _utf8_len(text[: index + 1]) > text_budget:
+            break
+        if character == " ":
+            best_index = index
+    return best_index
+
+
+def _hard_split_index_for_budget(text: str, text_budget: int) -> int:
+    for index in range(1, len(text) + 1):
+        if _utf8_len(text[:index]) > text_budget:
+            return index - 1
+    return len(text)

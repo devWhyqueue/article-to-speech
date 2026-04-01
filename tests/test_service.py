@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from article_to_speech.core.models import AudioArtifact, IncomingUrlJob, JobStatus, ResolvedArticle
+from article_to_speech.core.exceptions import SpeechSynthesisError
 from article_to_speech.service import ArticleToSpeechService
 from article_to_speech.telegram_support import build_caption
 
@@ -100,14 +101,14 @@ class StubResolver:
         return None
 
 
-class StubBrowser:
+class StubSynthesizer:
     def __init__(self) -> None:
-        self.requests: list[str] = []
+        self.chunks: list[str] = []
 
     async def synthesize_article(
-        self, article: ResolvedArticle, requests: list[str]
+        self, article: ResolvedArticle, chunks: list[Any]
     ) -> AudioArtifact:
-        self.requests = requests
+        self.chunks = [chunk.text for chunk in chunks]
         return AudioArtifact(
             path=Path("/tmp/audio.mp3"),
             mime_type="audio/mpeg",
@@ -118,8 +119,8 @@ class StubBrowser:
 
 
 class StubFormatter:
-    def build_requests(self, article: ResolvedArticle) -> list[str]:
-        return [article.body_text]
+    def build_chunks(self, article: ResolvedArticle) -> list[Any]:
+        return [type("Chunk", (), {"text": article.body_text})()]
 
 
 async def test_process_job_sends_archive_lookup_link_before_audio() -> None:
@@ -140,7 +141,7 @@ async def test_process_job_sends_archive_lookup_link_before_audio() -> None:
         store=cast(Any, StubStore()),
         telegram=cast(Any, telegram),
         resolver=cast(Any, StubResolver(article)),
-        browser=cast(Any, StubBrowser()),
+        synthesizer=cast(Any, StubSynthesizer()),
         formatter=cast(Any, StubFormatter()),
     )
     job = IncomingUrlJob(
@@ -177,7 +178,7 @@ async def test_process_job_skips_intermediate_message_for_non_archive_url() -> N
         store=cast(Any, StubStore()),
         telegram=cast(Any, telegram),
         resolver=cast(Any, StubResolver(article)),
-        browser=cast(Any, StubBrowser()),
+        synthesizer=cast(Any, StubSynthesizer()),
         formatter=cast(Any, StubFormatter()),
     )
     job = IncomingUrlJob(
@@ -209,19 +210,22 @@ async def test_process_job_sends_single_audio_for_multiple_requests() -> None:
         body_text="Body text",
     )
     telegram = StubTelegram()
-    browser = StubBrowser()
+    synthesizer = StubSynthesizer()
 
-    class MultiRequestFormatter:
-        def build_requests(self, article: ResolvedArticle) -> list[str]:
-            return [f"{article.body_text} part 1", f"{article.body_text} part 2"]
+    class MultiChunkFormatter:
+        def build_chunks(self, article: ResolvedArticle) -> list[Any]:
+            return [
+                type("Chunk", (), {"text": f"{article.body_text} part 1"})(),
+                type("Chunk", (), {"text": f"{article.body_text} part 2"})(),
+            ]
 
     service = ArticleToSpeechService(
         settings=cast(Any, object()),
         store=cast(Any, StubStore()),
         telegram=cast(Any, telegram),
         resolver=cast(Any, StubResolver(article)),
-        browser=cast(Any, browser),
-        formatter=cast(Any, MultiRequestFormatter()),
+        synthesizer=cast(Any, synthesizer),
+        formatter=cast(Any, MultiChunkFormatter()),
     )
     job = IncomingUrlJob(
         job_id=1,
@@ -235,5 +239,47 @@ async def test_process_job_sends_single_audio_for_multiple_requests() -> None:
 
     await service.process_job(job, notify_failures=True)
 
-    assert browser.requests == ["Body text part 1", "Body text part 2"]
+    assert synthesizer.chunks == ["Body text part 1", "Body text part 2"]
     assert len(telegram.audio_calls) == 1
+
+
+async def test_process_job_surfaces_synthesis_failures_to_telegram() -> None:
+    article = ResolvedArticle(
+        canonical_url="https://example.com/story",
+        original_url="https://example.com/story",
+        final_url="https://example.com/story",
+        title="Example Headline",
+        subtitle=None,
+        source="Example News",
+        author="Jane Doe",
+        published_at="2026-03-24",
+        body_text="Body text",
+    )
+    telegram = StubTelegram()
+
+    class FailingSynthesizer:
+        async def synthesize_article(self, article: ResolvedArticle, chunks: list[Any]) -> AudioArtifact:
+            raise SpeechSynthesisError("Google TTS request failed")
+
+    service = ArticleToSpeechService(
+        settings=cast(Any, object()),
+        store=cast(Any, StubStore()),
+        telegram=cast(Any, telegram),
+        resolver=cast(Any, StubResolver(article)),
+        synthesizer=cast(Any, FailingSynthesizer()),
+        formatter=cast(Any, StubFormatter()),
+    )
+    job = IncomingUrlJob(
+        job_id=1,
+        chat_id=123,
+        message_id=99,
+        input_url="https://example.com/story",
+        created_at=datetime.now(UTC),
+        status=JobStatus.QUEUED,
+        attempts=0,
+    )
+
+    result = await service.process_job(job, notify_failures=True)
+
+    assert result is None
+    assert telegram.messages[-1] == (123, "Could not process that article: Google TTS request failed")

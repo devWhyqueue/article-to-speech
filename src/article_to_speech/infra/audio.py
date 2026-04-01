@@ -1,35 +1,26 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
-import logging
 import mimetypes
-import os
-import signal
+import re
+import shutil
 import subprocess
-from contextlib import suppress
 from pathlib import Path
 
-from article_to_speech.browser.launch import (
-    clear_shared_browser_debug_port,
-    write_shared_browser_debug_port,
-)
-from article_to_speech.core.browser_runtime import (
-    browser_process_env,
-    free_local_port,
-    setup_browser_args,
-)
 from article_to_speech.core.models import AudioArtifact
 
-LOGGER = logging.getLogger(__name__)
 
-
-def write_audio_bytes(output_path: Path, payload: bytes) -> AudioArtifact:
+def write_audio_bytes(
+    output_path: Path,
+    payload: bytes,
+    *,
+    source_method: str = "network",
+) -> AudioArtifact:
     """Persist raw audio bytes and return the corresponding artifact metadata."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(payload)
-    return _build_artifact(output_path, payload, "network")
+    return _build_artifact(output_path, payload, source_method)
 
 
 def write_base64_audio(output_path: Path, payload_base64: str, source_method: str) -> AudioArtifact:
@@ -65,6 +56,37 @@ def concat_mp3_files(input_paths: list[Path], output_path: Path) -> AudioArtifac
     return _build_artifact(output_path, output_path.read_bytes(), "concat")
 
 
+def artifact_dir(root: Path, title: str, source_url: str | None = None) -> Path:
+    """Return a stable artifact subdirectory for the given article title."""
+    directory = root / artifact_stem(title, source_url)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def artifact_file_name(title: str, source_url: str | None, extension: str) -> str:
+    """Return a descriptive artifact file name for the given article."""
+    normalized_extension = extension if extension.startswith(".") else f".{extension}"
+    return f"{artifact_stem(title, source_url)}{normalized_extension}"
+
+
+def build_final_artifact(
+    title: str,
+    artifacts_dir: Path,
+    chunk_outputs: list[Path],
+    source_url: str | None = None,
+) -> AudioArtifact:
+    """Assemble the final article artifact from one or more MP3 chunks."""
+    if not chunk_outputs:
+        raise ValueError("No audio chunks were produced for synthesis.")
+    output_dir = artifact_dir(artifacts_dir, title, source_url)
+    output_path = output_dir / artifact_file_name(title, source_url, ".mp3")
+    if len(chunk_outputs) == 1:
+        if chunk_outputs[0].resolve() != output_path.resolve():
+            shutil.copyfile(chunk_outputs[0], output_path)
+        return _build_artifact(output_path, output_path.read_bytes(), "single_chunk")
+    return concat_mp3_files(chunk_outputs, output_path)
+
+
 def _build_written_artifact(output_path: Path, payload: bytes, source_method: str) -> AudioArtifact:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(payload)
@@ -91,41 +113,19 @@ def _run_ffmpeg(*, input_args: list[str], output_path: Path, codec_args: list[st
     )
 
 
-async def run_manual_setup_browser(executable_path: Path, profile_dir: Path) -> None:
-    """Launch a manual ChatGPT browser window attached to the shared profile."""
-    debug_port = free_local_port()
-    command = [
-        os.fspath(executable_path),
-        *setup_browser_args(profile_dir, "https://chatgpt.com/"),
-        f"--remote-debugging-port={debug_port}",
-    ]
-    write_shared_browser_debug_port(profile_dir, debug_port)
-    LOGGER.info(
-        "setup_browser_ready",
-        extra={
-            "context": {
-                "novnc_url": "http://localhost:6080/vnc.html",
-                "profile_dir": str(profile_dir),
-            }
-        },
-    )
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        env=browser_process_env(),
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-        await process.wait()
-    except asyncio.CancelledError:
-        process.terminate()
-        with suppress(ProcessLookupError):
-            await asyncio.wait_for(process.wait(), timeout=10)
-        raise
-    finally:
-        clear_shared_browser_debug_port(profile_dir)
-        if process.returncode is None:
-            with suppress(ProcessLookupError):
-                process.send_signal(signal.SIGTERM)
-            with suppress(asyncio.TimeoutError, ProcessLookupError):
-                await asyncio.wait_for(process.wait(), timeout=10)
+def artifact_stem(title: str, source_url: str | None = None) -> str:
+    """Return a stable stem for article artifacts."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-").lower() or "article"
+    snapshot_id = _archive_snapshot_id(source_url)
+    if snapshot_id:
+        return f"{slug}-{snapshot_id}"
+    return slug
+
+
+def _archive_snapshot_id(source_url: str | None) -> str | None:
+    if not source_url:
+        return None
+    match = re.search(r"archive\.(?:is|ph|today)/([A-Za-z0-9]+)", source_url)
+    if match is None:
+        return None
+    return match.group(1).lower()

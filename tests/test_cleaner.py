@@ -2,7 +2,7 @@ from article_to_speech.article.cleaner import NarrationFormatter
 from article_to_speech.core.models import ResolvedArticle
 
 
-def test_cleaner_preserves_article_text_in_single_request() -> None:
+def test_cleaner_preserves_article_text_in_single_chunk() -> None:
     formatter = NarrationFormatter()
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
@@ -15,15 +15,15 @@ def test_cleaner_preserves_article_text_in_single_request() -> None:
         published_at="2026-03-24",
         body_text=("## Section\n\nParagraph one.\n\n" + ("Paragraph two. " * 40)),
     )
-    requests = formatter.build_requests(article)
-    assert len(requests) == 1
-    assert "do not read markdown punctuation literally" in requests[0].prompt_text
-    assert "<text>" in requests[0].prompt_text
-    assert "Example" in requests[0].prompt_text
-    assert "Subtitle" in requests[0].prompt_text
-    assert "Section" in requests[0].prompt_text
-    assert "Paragraph one." in requests[0].prompt_text
-    assert "Paragraph two." in requests[0].prompt_text
+    chunks = formatter.build_chunks(article)
+
+    assert len(chunks) == 1
+    assert chunks[0].text.startswith("Example\n\nSubtitle")
+    assert "<text>" not in chunks[0].text
+    assert "Part 1 of" not in chunks[0].text
+    assert "Section" in chunks[0].text
+    assert "Paragraph one." in chunks[0].text
+    assert "Paragraph two." in chunks[0].text
 
 
 def test_cleaner_drops_boilerplate_lines() -> None:
@@ -74,9 +74,9 @@ def test_cleaner_trims_leading_site_chrome_labels() -> None:
     assert "Costa Rica said it had agreed to take up to 25 deportees a week from the United States." in cleaned
 
 
-def test_cleaner_chunks_long_article_into_multiple_requests() -> None:
+def test_cleaner_chunks_long_article_into_multiple_chunks() -> None:
     formatter = NarrationFormatter()
-    formatter.max_chatgpt_message_chars = 450
+    formatter.max_tts_input_bytes = 450
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",
@@ -95,28 +95,21 @@ def test_cleaner_chunks_long_article_into_multiple_requests() -> None:
         ),
     )
 
-    requests = formatter.build_requests(article)
+    chunks = formatter.build_chunks(article)
 
-    assert len(requests) > 1
-    assert "Part 1 of" in requests[0].prompt_text
-    assert (
-        "Output the full cleaned text of this part as a direct continuation of the article."
-        in requests[0].prompt_text
-    )
-    assert "return only the cleaned passage." in requests[0].prompt_text
-    assert "Example" in requests[0].prompt_text
-    assert "Subtitle" in requests[0].prompt_text
-    assert all("<text>" not in request.prompt_text for request in requests)
-    assert all(
-        len(request.prompt_text) <= formatter.max_chatgpt_message_chars for request in requests
-    )
-    assert all("Example" not in request.prompt_text for request in requests[1:])
-    assert all("Subtitle" not in request.prompt_text for request in requests[1:])
+    assert len(chunks) > 1
+    assert "Example" in chunks[0].text
+    assert "Subtitle" in chunks[0].text
+    assert all("<text>" not in chunk.text for chunk in chunks)
+    assert all("Part " not in chunk.text for chunk in chunks)
+    assert all(len(chunk.text.encode("utf-8")) <= formatter.max_tts_input_bytes for chunk in chunks)
+    assert all("Example" not in chunk.text for chunk in chunks[1:])
+    assert all("Subtitle" not in chunk.text for chunk in chunks[1:])
 
 
 def test_cleaner_prefers_paragraph_boundaries_when_chunking() -> None:
     formatter = NarrationFormatter()
-    formatter.max_chatgpt_message_chars = 460
+    formatter.max_tts_input_bytes = 220
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",
@@ -129,20 +122,20 @@ def test_cleaner_prefers_paragraph_boundaries_when_chunking() -> None:
         body_text="Alpha. " * 18 + "\n\n" + "Beta. " * 18,
     )
 
-    requests = formatter.build_requests(article)
+    chunks = formatter.build_chunks(article)
 
-    alpha_chunks = [request.prompt_text for request in requests if "Alpha." in request.prompt_text]
-    beta_chunks = [request.prompt_text for request in requests if "Beta." in request.prompt_text]
+    alpha_chunks = [chunk.text for chunk in chunks if "Alpha." in chunk.text]
+    beta_chunks = [chunk.text for chunk in chunks if "Beta." in chunk.text]
 
     assert alpha_chunks
     assert beta_chunks
-    assert all("Beta." not in prompt_text for prompt_text in alpha_chunks)
-    assert all("Alpha." not in prompt_text for prompt_text in beta_chunks)
+    assert all("Beta." not in chunk_text for chunk_text in alpha_chunks)
+    assert all("Alpha." not in chunk_text for chunk_text in beta_chunks)
 
 
 def test_cleaner_splits_oversized_paragraph_safely() -> None:
     formatter = NarrationFormatter()
-    formatter.max_chatgpt_message_chars = 340
+    formatter.max_tts_input_bytes = 180
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",
@@ -160,19 +153,17 @@ def test_cleaner_splits_oversized_paragraph_safely() -> None:
         ),
     )
 
-    requests = formatter.build_requests(article)
+    chunks = formatter.build_chunks(article)
 
-    assert len(requests) > 1
-    assert "Sentence one" in requests[0].prompt_text
-    assert any("Sentence four" in request.prompt_text for request in requests)
-    assert all(
-        len(request.prompt_text) <= formatter.max_chatgpt_message_chars for request in requests
-    )
+    assert len(chunks) > 1
+    assert "Sentence one" in chunks[0].text
+    assert any("Sentence four" in chunk.text for chunk in chunks)
+    assert all(len(chunk.text.encode("utf-8")) <= formatter.max_tts_input_bytes for chunk in chunks)
 
 
 def test_cleaner_hard_splits_when_sentence_exceeds_budget() -> None:
     formatter = NarrationFormatter()
-    formatter.max_chatgpt_message_chars = 320
+    formatter.max_tts_input_bytes = 320
     article = ResolvedArticle(
         canonical_url="https://example.com/article",
         original_url="https://example.com/article",
@@ -185,9 +176,7 @@ def test_cleaner_hard_splits_when_sentence_exceeds_budget() -> None:
         body_text="A" * 600,
     )
 
-    requests = formatter.build_requests(article)
+    chunks = formatter.build_chunks(article)
 
-    assert len(requests) > 1
-    assert all(
-        len(request.prompt_text) <= formatter.max_chatgpt_message_chars for request in requests
-    )
+    assert len(chunks) > 1
+    assert all(len(chunk.text.encode("utf-8")) <= formatter.max_tts_input_bytes for chunk in chunks)
