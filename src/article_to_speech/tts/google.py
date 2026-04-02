@@ -8,6 +8,7 @@ from typing import Protocol
 import requests
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+from requests import Response
 
 from article_to_speech.article.source_detection import detect_supported_source
 from article_to_speech.core.config import Settings
@@ -73,11 +74,16 @@ class GoogleTextToSpeechSynthesizer:
                 else output_dir
                 / f"{artifact_stem(article.title, article.final_url)}-chunk-{index:02d}.mp3"
             )
-            payload = await asyncio.to_thread(
-                self._client.synthesize_speech,
-                text=chunk.text,
-                voice_name=voice_name,
-            )
+            try:
+                payload = await asyncio.to_thread(
+                    self._client.synthesize_speech,
+                    text=chunk.text,
+                    voice_name=voice_name,
+                )
+            except SpeechSynthesisError as error:
+                raise SpeechSynthesisError(
+                    f"Google TTS chunk {index}/{len(chunks)} failed: {error}"
+                ) from error
             if not payload:
                 raise SpeechSynthesisError("Google TTS returned an empty audio payload.")
             write_audio_bytes(output_path, payload, source_method="google_tts")
@@ -126,24 +132,8 @@ class GoogleTextToSpeechApiClient:
         """Call the Google Cloud Text-to-Speech REST API and return MP3 bytes."""
         if not self._credentials.valid:
             self._credentials.refresh(self._request)
-        response = requests.post(
-            _GOOGLE_TTS_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {self._credentials.token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "input": {"text": text},
-                "voice": {
-                    "languageCode": _voice_language_code(voice_name),
-                    "name": voice_name,
-                },
-                "audioConfig": {"audioEncoding": "MP3"},
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        payload = response.json().get("audioContent")
+        response = _post_google_tts_request(self._credentials.token, text, voice_name)
+        payload = _decode_audio_payload(response)
         if not isinstance(payload, str):
             raise SpeechSynthesisError("Google TTS response did not include audio content.")
         return base64.b64decode(payload)
@@ -151,3 +141,50 @@ class GoogleTextToSpeechApiClient:
 
 def _voice_language_code(voice_name: str) -> str:
     return "-".join(voice_name.split("-", maxsplit=2)[:2])
+
+
+def _post_google_tts_request(token: str | None, text: str, voice_name: str) -> Response:
+    response = requests.post(
+        _GOOGLE_TTS_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "input": {"text": text},
+            "voice": {
+                "languageCode": _voice_language_code(voice_name),
+                "name": voice_name,
+            },
+            "audioConfig": {"audioEncoding": "MP3"},
+        },
+        timeout=60,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as error:
+        raise SpeechSynthesisError(_google_tts_error_message(response)) from error
+    except requests.RequestException as error:
+        raise SpeechSynthesisError(f"Google TTS request failed: {error}") from error
+    return response
+
+
+def _decode_audio_payload(response: Response) -> str | None:
+    return response.json().get("audioContent")
+
+
+def _google_tts_error_message(response: Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        detail = response.text.strip() or f"HTTP {response.status_code}"
+        return f"Google TTS request failed: {detail}"
+    error_payload = payload.get("error")
+    if isinstance(error_payload, dict):
+        message = error_payload.get("message")
+        status = error_payload.get("status")
+        if isinstance(message, str) and message:
+            if isinstance(status, str) and status:
+                return f"Google TTS request failed ({status}): {message}"
+            return f"Google TTS request failed: {message}"
+    return f"Google TTS request failed: HTTP {response.status_code}"

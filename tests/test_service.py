@@ -283,3 +283,41 @@ async def test_process_job_surfaces_synthesis_failures_to_telegram() -> None:
 
     assert result is None
     assert telegram.messages[-1] == (123, "Could not process that article: Google TTS request failed")
+
+
+async def test_process_job_skips_duplicate_non_queued_job() -> None:
+    article = ResolvedArticle(
+        canonical_url="https://example.com/story",
+        original_url="https://example.com/story",
+        final_url="https://archive.is/SKNHa",
+        title="Example Headline",
+        subtitle=None,
+        source="Example News",
+        author="Jane Doe",
+        published_at="2026-03-24",
+        body_text="Body text",
+    )
+    telegram = StubTelegram()
+    service = ArticleToSpeechService(
+        settings=cast(Any, object()),
+        store=cast(Any, StubStore()),
+        telegram=cast(Any, telegram),
+        resolver=cast(Any, StubResolver(article)),
+        synthesizer=cast(Any, StubSynthesizer()),
+        formatter=cast(Any, StubFormatter()),
+    )
+    job = IncomingUrlJob(
+        job_id=1,
+        chat_id=123,
+        message_id=99,
+        input_url="https://example.com/story",
+        created_at=datetime.now(UTC),
+        status=JobStatus.FAILED,
+        attempts=1,
+    )
+
+    result = await service.process_job(job, notify_failures=True)
+
+    assert result is None
+    assert telegram.messages == []
+    assert telegram.audio_calls == []

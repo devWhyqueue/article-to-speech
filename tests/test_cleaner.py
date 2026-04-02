@@ -45,6 +45,36 @@ def test_cleaner_drops_boilerplate_lines() -> None:
     assert "Actual paragraph." in cleaned
 
 
+def test_cleaner_trims_trailing_related_content_sections() -> None:
+    formatter = NarrationFormatter()
+    article = ResolvedArticle(
+        canonical_url="https://example.com/article",
+        original_url="https://example.com/article",
+        final_url="https://example.com/article",
+        title="Example",
+        subtitle=None,
+        source=None,
+        author=None,
+        published_at=None,
+        body_text=(
+            "The court appeared likely to let the administration move ahead.\n\n"
+            "See more on: U.S. Politics, American Civil Liberties Union, U.S. Supreme Court, Donald Trump\n\n"
+            "Related Content\n\n"
+            "More in Politics\n\n"
+            "In South Dakota, Neighbors Feel Sorry for Kristi Noem's Husband\n\n"
+            "Trending in The Times\n\n"
+            "Opinion: The Epstein Class Had a Signature Weakness"
+        ),
+    )
+
+    cleaned = formatter.clean_article_text(article)
+
+    assert "The court appeared likely to let the administration move ahead." in cleaned
+    assert "See more on:" not in cleaned
+    assert "Related Content" not in cleaned
+    assert "Trending in The Times" not in cleaned
+
+
 def test_cleaner_trims_leading_site_chrome_labels() -> None:
     formatter = NarrationFormatter()
     article = ResolvedArticle(

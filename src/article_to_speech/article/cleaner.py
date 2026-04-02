@@ -20,11 +20,19 @@ BOILERPLATE_PREFIXES = (
     "our coverage of",
     "follow live updates",
 )
+TRAILING_SECTION_PREFIXES = (
+    "see more on:",
+    "related content",
+    "more in ",
+    "trending in the times",
+    "editors’ picks",
+    "editors' picks",
+)
 HEADING_SENTINEL = "\u0000heading\u0000"
 
 
 class NarrationFormatter:
-    max_tts_input_bytes = 5_000
+    max_tts_input_bytes = 4_500
 
     def clean_article_text(self, article: ResolvedArticle) -> str:
         """Convert markdown article content into narration-friendly plain text."""
@@ -133,6 +141,7 @@ class NarrationFormatter:
     def _clean_body(self, article: ResolvedArticle) -> str:
         body = MULTI_NEWLINE_PATTERN.sub("\n\n", _clean_markdown_body(article.body_text)).strip()
         body = _trim_leading_noise(body)
+        body = _trim_trailing_noise_sections(body)
         return body.replace(HEADING_SENTINEL, "")
 
     def _intro_parts(self, article: ResolvedArticle) -> list[str]:
@@ -189,6 +198,15 @@ def _trim_leading_noise(text: str) -> str:
         if _looks_like_sentence(line):
             return "\n\n".join(lines[index:])
     return "\n\n".join(lines)
+
+
+def _trim_trailing_noise_sections(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if any(lowered.startswith(prefix) for prefix in TRAILING_SECTION_PREFIXES):
+            return "\n".join(lines[:index]).strip()
+    return "\n".join(lines).strip()
 
 
 def _looks_like_sentence(text: str) -> bool:

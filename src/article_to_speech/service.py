@@ -59,6 +59,12 @@ class ArticleToSpeechService:
 
     async def process_job(self, job: IncomingUrlJob, *, notify_failures: bool) -> JobResult | None:
         async with self._serial_lock:
+            if job.status is not JobStatus.QUEUED:
+                LOGGER.info(
+                    "skip_duplicate_job",
+                    extra={"context": {"job_id": job.job_id, "status": job.status.value}},
+                )
+                return None
             try:
                 canonical_url = normalize_url(job.input_url)
                 processing_job = self._store.mark_processing(job.job_id, canonical_url)
@@ -161,6 +167,12 @@ class TelegramPollingRunner:
             )
         except InvalidUrlError as error:
             await self._telegram.send_message(chat_id, str(error))
+            return
+        if job.status is not JobStatus.QUEUED:
+            LOGGER.info(
+                "ignoring_duplicate_update",
+                extra={"context": {"job_id": job.job_id, "status": job.status.value}},
+            )
             return
         if job.message_id is not None:
             await self._set_processing_reaction(chat_id, job.message_id)

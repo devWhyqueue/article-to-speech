@@ -111,6 +111,37 @@ async def test_runner_skips_processing_reaction_for_invalid_message() -> None:
     assert service.processed_jobs == []
 
 
+async def test_runner_ignores_duplicate_non_queued_job() -> None:
+    service = FakeService()
+    duplicate_job = IncomingUrlJob(
+        job_id=1,
+        chat_id=123,
+        message_id=99,
+        input_url="https://example.com/article",
+        created_at=datetime.now(UTC),
+        status=JobStatus.FAILED,
+        attempts=1,
+    )
+    service.enqueue_from_message = lambda **kwargs: duplicate_job
+    telegram = FakeTelegram()
+    runner = TelegramPollingRunner(cast(Any, _settings()), cast(Any, service), cast(Any, telegram))
+
+    await runner._handle_update(
+        {
+            "update_id": 1,
+            "message": {
+                "message_id": 99,
+                "chat": {"id": 123},
+                "text": "https://example.com/article",
+            },
+        }
+    )
+
+    assert telegram.reactions == []
+    assert telegram.messages == []
+    assert service.processed_jobs == []
+
+
 async def test_runner_disables_webhook_before_polling() -> None:
     service = FakeService()
     telegram = FakeTelegram()

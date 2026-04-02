@@ -4,11 +4,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import SpeechSynthesisError
 from article_to_speech.core.models import NarrationChunk, ResolvedArticle
-from article_to_speech.tts.google import GoogleTextToSpeechSynthesizer, voice_name_for_article
+from article_to_speech.tts.google import (
+    GoogleTextToSpeechApiClient,
+    GoogleTextToSpeechSynthesizer,
+    voice_name_for_article,
+)
 
 
 class FakeTextToSpeechClient:
@@ -132,4 +137,39 @@ async def test_google_tts_rejects_empty_audio_payload(tmp_path: Path) -> None:
         await synthesizer.synthesize_article(
             _article("https://www.nytimes.com/example", "The New York Times"),
             [NarrationChunk(text="Single chunk text.")],
+        )
+
+
+def test_google_tts_surfaces_api_error_payload(monkeypatch) -> None:
+    class FakeCredentials:
+        valid = True
+        token = "token"
+
+        def refresh(self, request) -> None:
+            return None
+
+    response = requests.Response()
+    response.status_code = 400
+    response._content = (
+        b'{"error":{"code":400,"message":"This request contains sentences that are too long.",'
+        b'"status":"INVALID_ARGUMENT"}}'
+    )
+    response.url = "https://texttospeech.googleapis.com/v1/text:synthesize"
+    response.request = requests.Request("POST", response.url).prepare()
+
+    monkeypatch.setattr(
+        "article_to_speech.tts.google.service_account.Credentials.from_service_account_file",
+        lambda *_args, **_kwargs: FakeCredentials(),
+    )
+    monkeypatch.setattr("article_to_speech.tts.google.requests.post", lambda *args, **kwargs: response)
+
+    client = GoogleTextToSpeechApiClient(Path("/tmp/service-account.json"))
+
+    with pytest.raises(
+        SpeechSynthesisError,
+        match=r"INVALID_ARGUMENT\): This request contains sentences that are too long\.",
+    ):
+        client.synthesize_speech(
+            text="Sentence.",
+            voice_name="en-US-Chirp3-HD-Kore",
         )
