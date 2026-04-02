@@ -7,6 +7,7 @@ from article_to_speech.core.exceptions import InvalidUrlError
 
 URL_PATTERN = re.compile(r"https?://[^\s<>\"]+")
 TRACKING_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "cmpid", "sara_ref")
+TRACKING_KEYS = {"share"}
 
 
 def extract_first_url(message_text: str) -> str:
@@ -25,7 +26,7 @@ def normalize_url(url: str) -> str:
     query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if not key.lower().startswith(TRACKING_PREFIXES)
+        if not key.lower().startswith(TRACKING_PREFIXES) and key.lower() not in TRACKING_KEYS
     ]
     normalized = parsed._replace(
         scheme=parsed.scheme.lower(),

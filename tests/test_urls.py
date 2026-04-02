@@ -20,3 +20,12 @@ def test_normalize_url_strips_spiegel_share_parameter() -> None:
         )
         == "https://www.spiegel.de/politik/deutschland/story?id=2"
     )
+
+
+def test_normalize_url_strips_faz_share_parameter() -> None:
+    assert (
+        normalize_url(
+            "https://www.faz.net/aktuell/politik/inland/story.html?share=androidfaznativeshare"
+        )
+        == "https://www.faz.net/aktuell/politik/inland/story.html"
+    )
