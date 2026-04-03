@@ -470,3 +470,56 @@ async def test_render_archive_html_keeps_other_cached_proxies_after_one_fails(
     ]
     assert fetcher._archive_proxy_urls_cache == (working_proxy_url,)
     assert load_cached_archive_proxy_urls(cache_path) == (working_proxy_url,)
+
+
+@pytest.mark.asyncio
+async def test_render_archive_html_tries_queryless_fallback_before_next_proxy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    first_proxy_url = "http://user1:pass1@proxy1.example:8080"
+    second_proxy_url = "http://user2:pass2@proxy2.example:8081"
+    fetcher = BrowserPageFetcher(settings)
+    fetcher._archive_proxy_urls_cache = (first_proxy_url, second_proxy_url)
+    attempts: list[tuple[str, str]] = []
+
+    async def fake_render(_playwright, archive_url: str, proxy: ProxySettings | None) -> RenderedPage:
+        assert proxy is not None
+        attempts.append((proxy["server"], archive_url))
+        if (
+            proxy["server"] == "http://proxy1.example:8080"
+            and archive_url == "https://archive.is/https://example.com/story?ref=share"
+        ):
+            raise TimeoutError("lookup returned no results")
+        if proxy["server"] == "http://proxy1.example:8080":
+            return RenderedPage(html="ok", final_url="https://archive.is/example")
+        raise AssertionError(f"second proxy should not be used: {proxy}")
+
+    monkeypatch.setattr(
+        "article_to_speech.browser.fetcher.async_playwright",
+        lambda: _FakePlaywrightContextManager(),
+    )
+    monkeypatch.setattr(
+        "article_to_speech.browser.fetcher.archive_lookup_urls",
+        lambda _url: (
+            "https://archive.is/https://example.com/story?ref=share",
+            "https://archive.is/https://example.com/story",
+        ),
+    )
+    monkeypatch.setattr(fetcher, "_render_archive_with_proxy", fake_render)
+
+    result = await fetcher.render_archive_html("https://example.com/story?ref=share")
+
+    assert result.final_url == "https://archive.is/example"
+    assert attempts == [
+        (
+            "http://proxy1.example:8080",
+            "https://archive.is/https://example.com/story?ref=share",
+        ),
+        (
+            "http://proxy1.example:8080",
+            "https://archive.is/https://example.com/story",
+        ),
+    ]
+    assert fetcher._archive_proxy_urls_cache == (first_proxy_url, second_proxy_url)

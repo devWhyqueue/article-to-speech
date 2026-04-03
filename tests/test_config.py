@@ -23,6 +23,9 @@ def test_settings_use_headed_browser_when_display_is_available(tmp_path, monkeyp
         encoding="utf-8",
     )
     monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.delenv("BROWSER_TIMEZONE", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
     settings = Settings.load(tmp_path)
 
@@ -139,7 +142,7 @@ def test_settings_parse_archive_proxy_list_url(tmp_path, monkeypatch) -> None:
     assert settings.archive_proxy_list_url == "https://proxy.example/list.txt"
 
 
-def test_settings_reject_missing_google_credentials_env_var(tmp_path) -> None:
+def test_settings_reject_missing_google_credentials_env_var(tmp_path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
@@ -150,6 +153,7 @@ def test_settings_reject_missing_google_credentials_env_var(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
     with pytest.raises(ConfigurationError, match="GOOGLE_APPLICATION_CREDENTIALS"):
         Settings.load(tmp_path)

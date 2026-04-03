@@ -52,15 +52,15 @@ class BrowserPageFetcher:
         """Render an archive.is snapshot page for the given article URL."""
         async with async_playwright() as playwright:
             last_error: Exception | None = None
-            for archive_url in archive_lookup_urls(url):
-                for proxy_url in (*await self._archive_proxy_urls(), None):
+            for proxy_url in (*await self._archive_proxy_urls(), None):
+                for archive_url in archive_lookup_urls(url):
                     proxy = parse_proxy_settings(proxy_url) if proxy_url is not None else None
                     try:
                         return await self._render_archive_with_proxy(playwright, archive_url, proxy)
                     except Exception as error:  # noqa: BLE001
-                        if proxy_url is not None:
-                            self._drop_archive_proxy_url(proxy_url)
                         last_error = error
+                if proxy_url is not None:
+                    self._drop_archive_proxy_url(proxy_url)
             if last_error is None:
                 raise TimeoutError("Archive render failed")
             raise last_error
