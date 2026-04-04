@@ -116,6 +116,9 @@ def test_extracts_spiegel_archive_snapshot_ctofu_as_markdown() -> None:
         "Irgendwann habe ich begriffen, dass ich meinem Gehirn das Leben "
         "grundlos schwer gemacht habe."
     ) in article.body_text
+    assert "Anzeige" not in article.body_text
+    assert "Bei Amazon bestellen" not in article.body_text
+    assert "Preisabfragezeitpunkt" not in article.body_text
     assert "DER SPIEGEL Zur Startseite" not in article.body_text
 
 
@@ -206,3 +209,42 @@ def test_extracts_zeit_archive_without_page_heading() -> None:
     )
     assert "## Was sich 2027 ändert" in article.body_text
     assert "Diese Zusammenfassung wurde" not in article.body_text
+
+
+def test_extracts_spiegel_archive_without_embedded_media_controls() -> None:
+    article = ArticleExtractor().extract(
+        url="https://www.spiegel.de/ausland/example.html",
+        final_url="https://archive.is/example",
+        html="""
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <title>Iran-Krieg: Interview mit einem Experten - DER SPIEGEL</title>
+  </head>
+  <body>
+    <main>
+        <article>
+          <h1>Iran-Krieg: Interview mit einem Experten</h1>
+          <h2>Ein Gespräch über die Lage im Nahen Osten.</h2>
+        <div>SPIEGEL: Wie ist die Lage, nachdem die jüngsten Angriffe die Region weiter destabilisiert haben?</div>
+        <div>Vaez: Sie bleibt sehr angespannt. Weitere Eskalation ist möglich, wenn keine Seite politischen Spielraum für Gespräche schafft.</div>
+        <div>
+          Trumps Ansprache zum Irankrieg. 0 seconds of 1 minute, 35 seconds Volume 90%.
+          Tastaturkürzel. Shortcuts Open/Close / or? Spielen/Pause Leertaste.
+          Weitere Videos. Als Nächstes.
+        </div>
+        <div>SPIEGEL: Was müsste jetzt passieren, damit beide Seiten den Konflikt wieder unter Kontrolle bringen?</div>
+        <div>Vaez: Beide Seiten müssten politischen Spielraum für Verhandlungen schaffen und die öffentliche Eskalationsspirale durchbrechen.</div>
+      </article>
+    </main>
+  </body>
+</html>
+""",
+    )
+
+    assert article is not None
+    assert "SPIEGEL: Wie ist die Lage, nachdem die jüngsten Angriffe" in article.body_text
+    assert "Vaez: Beide Seiten müssten politischen Spielraum" in article.body_text
+    assert "Spielen/Pause" not in article.body_text
+    assert "Tastaturkürzel" not in article.body_text
+    assert "Weitere Videos" not in article.body_text

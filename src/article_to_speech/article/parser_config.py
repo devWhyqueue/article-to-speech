@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Final
 
 from bs4.element import Tag
-from dateutil import parser as date_parser
 
+from article_to_speech.article import _normalize_archive_text, _normalize_publication_date
 from article_to_speech.article.source_detection import SupportedSource
 
 DROP_SELECTORS: Final[tuple[str, ...]] = (
@@ -72,7 +72,7 @@ CONFIG_BY_SLUG: Final[dict[str, SourceParserConfig]] = {
             "foto:",
             "messenger whatsapp",
         ),
-        stop_markers=("mehr zum thema", "startseite", "kommentare"),
+        stop_markers=("anzeige", "mehr zum thema", "startseite", "kommentare"),
     ),
     "nytimes": SourceParserConfig(
         source=SupportedSource("nytimes", "The New York Times", ("nytimes.com",)),
@@ -120,12 +120,11 @@ CONFIG_BY_SLUG: Final[dict[str, SourceParserConfig]] = {
 
 def extract_published_at(flat_text: str) -> str | None:
     """Return the normalized publication date from a flattened article text blob."""
-    patterns = (
+    for pattern in (
         r"\b\d{1,2}\.\d{1,2}\.\d{4}, \d{2}[:.]\d{2}\b",
         r"\b\d{1,2}\.\s+[A-ZÄÖÜa-zäöü]+\s+\d{4}, \d{1,2}:\d{2}\s+Uhr\b",
         r"\b[A-Z][a-z]+\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}\s+[ap]\.m\. ET\b",
-    )
-    for pattern in patterns:
+    ):
         match = re.search(pattern, flat_text)
         if match is not None:
             return _normalize_date(match.group(0))
@@ -134,11 +133,7 @@ def extract_published_at(flat_text: str) -> str | None:
 
 def normalize_archive_text(text: str) -> str:
     """Normalize archive snapshot text into stable, newline-preserving plain text."""
-    lines = [re.sub(r"\s+", " ", line).strip() for line in text.replace("\r", "\n").splitlines()]
-    cleaned = "\n".join(line for line in lines if line).strip()
-    cleaned = re.sub(r"\s+([:;,.!?])", r"\1", cleaned)
-    cleaned = re.sub(r'([„“"»])\s+', r"\1", cleaned)
-    return cleaned.replace('"“', "“").replace('"”', "”")
+    return _normalize_archive_text(text)
 
 
 def _contains_zeit_page_heading(article: Tag) -> bool:
@@ -151,6 +146,8 @@ def _contains_zeit_page_heading(article: Tag) -> bool:
 
 def _is_stop_block(node: Tag, text: str, config: SourceParserConfig) -> bool:
     lowered = text.lower()
+    if any(lowered == marker or lowered.startswith(f"{marker} ") for marker in config.stop_markers):
+        return True
     return any(marker in lowered for marker in config.stop_markers) and (
         node.name in HEADING_TAGS or len(text.split()) <= 4
     )
@@ -225,23 +222,4 @@ def _extract_spiegel_subtitle_candidate(
 
 
 def _normalize_date(raw_value: str) -> str:
-    cleaned = raw_value.strip()
-    dayfirst = bool(re.match(r"\d{1,2}\.\d{1,2}\.\d{4}", cleaned))
-    for german, english in {
-        "januar": "January",
-        "februar": "February",
-        "märz": "March",
-        "april": "April",
-        "mai": "May",
-        "juni": "June",
-        "juli": "July",
-        "august": "August",
-        "september": "September",
-        "oktober": "October",
-        "november": "November",
-        "dezember": "December",
-    }.items():
-        cleaned = re.sub(german, english, cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.replace("Uhr", "").replace(" ET", "").strip()
-    cleaned = re.sub(r",\s*(\d{1,2})\.(\d{2})$", r", \1:\2", cleaned)
-    return date_parser.parse(cleaned, fuzzy=True, dayfirst=dayfirst).date().isoformat()
+    return _normalize_publication_date(raw_value)

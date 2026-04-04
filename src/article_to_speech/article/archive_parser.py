@@ -5,6 +5,13 @@ import re
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+from article_to_speech.article import (
+    _clone_article,
+    _drop_spiegel_ad_sections,
+    _is_spiegel_embedded_media_block,
+    _normalize_archive_text,
+    _select_main_article,
+)
 from article_to_speech.article.parser_config import (
     BODY_TAGS,
     CONFIG_BY_SLUG,
@@ -20,7 +27,6 @@ from article_to_speech.article.parser_config import (
     _looks_like_caption,
     _render_markdown_block,
     extract_published_at,
-    normalize_archive_text,
 )
 from article_to_speech.article.source_detection import detect_supported_source
 from article_to_speech.core.models import ResolvedArticle
@@ -37,7 +43,7 @@ def parse_supported_archive_article(url: str, final_url: str, html: str) -> Reso
     if article is None:
         return None
     article = _clone_article(article)
-    _drop_noise_nodes(article)
+    _drop_noise_nodes(article, config)
     return _build_article(url, final_url, soup, article, config)
 
 
@@ -51,7 +57,7 @@ def _build_article(
     title = _extract_title(article, config) or _extract_meta_title(soup, config)
     if title is None:
         return None
-    flat_text = normalize_archive_text(article.get_text("\n", strip=True))
+    flat_text = _normalize_archive_text(article.get_text("\n", strip=True))
     subtitle = _extract_subtitle(article, title, config)
     author = _extract_author(article, flat_text, config)
     published_at = _extract_published_at(article, flat_text, config)
@@ -78,30 +84,17 @@ def _build_article(
     )
 
 
-def _select_main_article(soup: BeautifulSoup) -> Tag | None:
-    candidates = soup.select("main article") or soup.find_all("article")
-    return (
-        max(candidates, key=lambda node: len(node.get_text(" ", strip=True).split()))
-        if candidates
-        else None
-    )
-
-
-def _clone_article(article: Tag) -> Tag:
-    clone = BeautifulSoup(str(article), "lxml").find("article")
-    assert clone is not None
-    return clone
-
-
-def _drop_noise_nodes(article: Tag) -> None:
+def _drop_noise_nodes(article: Tag, config: SourceParserConfig) -> None:
     for selector in DROP_SELECTORS:
         for node in article.select(selector):
             node.decompose()
+    if config.source.slug == "spiegel":
+        _drop_spiegel_ad_sections(article)
 
 
 def _extract_title(article: Tag, config: SourceParserConfig) -> str | None:
     heading = article.find("h1")
-    title = normalize_archive_text(heading.get_text(" ", strip=True)) or None if heading else None
+    title = _normalize_archive_text(heading.get_text(" ", strip=True)) or None if heading else None
     return None if title == config.source.source_name else title
 
 
@@ -124,7 +117,7 @@ def _extract_meta_title(soup: BeautifulSoup, config: SourceParserConfig) -> str 
         if raw_title.endswith(suffix):
             raw_title = raw_title[: -len(suffix)]
             break
-    return normalize_archive_text(raw_title) or None
+    return _normalize_archive_text(raw_title) or None
 
 
 def _extract_subtitle(article: Tag, title: str, config: SourceParserConfig) -> str | None:
@@ -136,11 +129,11 @@ def _extract_subtitle(article: Tag, title: str, config: SourceParserConfig) -> s
         heading = article.find("h1")
         if heading is not None and heading.parent is not None:
             for sibling in heading.parent.find_next_siblings():
-                candidate = normalize_archive_text(sibling.get_text(" ", strip=True))
+                candidate = _normalize_archive_text(sibling.get_text(" ", strip=True))
                 if _looks_like_subtitle(candidate, title, config):
                     return candidate
     for node in article.find_all(("div", "p"), recursive=True):
-        text = normalize_archive_text(node.get_text(" ", strip=True))
+        text = _normalize_archive_text(node.get_text(" ", strip=True))
         if _looks_like_subtitle(text, title, config):
             return text
     return None
@@ -174,14 +167,14 @@ def _extract_author(article: Tag, flat_text: str, config: SourceParserConfig) ->
     match = re.search(pattern, flat_text, re.DOTALL)
     if match is None:
         return None
-    author = " ".join(dict.fromkeys(normalize_archive_text(match.group(1)).splitlines()))
+    author = " ".join(dict.fromkeys(_normalize_archive_text(match.group(1)).splitlines()))
     return author.split(",", 1)[0].strip() if config.source.slug == "faz" else author
 
 
 def _extract_spiegel_author(article: Tag) -> str | None:
     marker = article.find(string=re.compile(r"^\s*Ein Interview von\s*$"))
     link = marker.parent.find("a") if marker and marker.parent is not None else None
-    return normalize_archive_text(link.get_text(" ", strip=True)) or None if link else None
+    return _normalize_archive_text(link.get_text(" ", strip=True)) or None if link else None
 
 
 def _extract_published_at(article: Tag, flat_text: str, config: SourceParserConfig) -> str | None:
@@ -189,7 +182,7 @@ def _extract_published_at(article: Tag, flat_text: str, config: SourceParserConf
         published_time = article.find("time")
         if published_time is not None:
             published_at = extract_published_at(
-                normalize_archive_text(published_time.get_text(" ", strip=True))
+                _normalize_archive_text(published_time.get_text(" ", strip=True))
             )
             if published_at is not None:
                 return published_at
@@ -217,7 +210,7 @@ def _extract_markdown_body(
     for node in article.find_all(BODY_TAGS):
         if any(isinstance(child, Tag) and child.name in BODY_TAGS for child in node.children):
             continue
-        raw_text = normalize_archive_text(node.get_text(" ", strip=True))
+        raw_text = _normalize_archive_text(node.get_text(" ", strip=True))
         if not raw_text or raw_text in skip_texts:
             continue
         if (
@@ -233,6 +226,9 @@ def _extract_markdown_body(
             if not re.match(r"^[A-ZÄÖÜ][A-Za-zÄÖÜäöüß-]+:", raw_text):
                 continue
             spiegel_paused = False
+        if config.source.slug == "spiegel" and _is_spiegel_embedded_media_block(raw_text):
+            spiegel_paused = True
+            continue
         if _contains_noise(raw_text, config) or _looks_like_caption(raw_text):
             continue
         if _is_stop_block(node, raw_text, config):

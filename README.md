@@ -32,6 +32,13 @@ Optional browser environment variables for archive rendering:
 
 ## Local development
 
+Install `ffmpeg` on the host if you want to run `article-to-speech` outside Docker. On Ubuntu/WSL:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+```
+
 ```bash
 uv sync --dev
 uv run playwright install --with-deps chromium
