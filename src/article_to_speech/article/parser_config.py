@@ -115,6 +115,28 @@ CONFIG_BY_SLUG: Final[dict[str, SourceParserConfig]] = {
         ),
         stop_markers=("mehr zum thema", "kommentare"),
     ),
+    "spektrum": SourceParserConfig(
+        source=SupportedSource("spektrum", "Spektrum.de", ("spektrum.de",)),
+        noise_markers=(
+            "direkt zum inhalt",
+            "spektrum.de logo",
+            "lesedauer",
+            "drucken",
+            "teilen",
+            "jetzt testen",
+            "sie haben bereits ein abo",
+            "bitte erlauben sie javascript",
+        ),
+        stop_markers=(
+            "das könnte sie auch interessieren",
+            "diesen artikel empfehlen",
+            "weiterlesen mit »spektrum +«",
+            "artikel zum thema",
+            "themenkanäle",
+            "sponsoredpartnerinhalte",
+            "schreiben sie uns",
+        ),
+    ),
 }
 
 
@@ -122,6 +144,7 @@ def extract_published_at(flat_text: str) -> str | None:
     """Return the normalized publication date from a flattened article text blob."""
     for pattern in (
         r"\b\d{1,2}\.\d{1,2}\.\d{4}, \d{2}[:.]\d{2}\b",
+        r"\b\d{1,2}\.\d{1,2}\.\d{4}\b",
         r"\b\d{1,2}\.\s+[A-ZÄÖÜa-zäöü]+\s+\d{4}, \d{1,2}:\d{2}\s+Uhr\b",
         r"\b[A-Z][a-z]+\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}\s+[ap]\.m\. ET\b",
     ):
@@ -178,7 +201,28 @@ def _looks_like_body_paragraph(text: str) -> bool:
 
 def _looks_like_caption(text: str) -> bool:
     lowered = text.lower()
-    if any(marker in lowered for marker in ("foto:", "credit...", "/ ap", "/ dpa", "/ sf")):
+    if any(
+        marker in lowered for marker in ("foto:", "credit...", "/ ap", "/ dpa", "/ sf", "bild:")
+    ):
+        return True
+    if text.startswith("©"):
+        return True
+    if (
+        any(marker in lowered for marker in ("(ausschnitt)", "getty images", "getty", "istock"))
+        and len(text.split()) <= 28
+    ):
+        return True
+    credit_markers = (
+        "getty",
+        "istock",
+        "picture alliance",
+        "imago",
+        "shutterstock",
+        "eyeem",
+        "afp",
+        "reuters",
+    )
+    if sum(marker in lowered for marker in credit_markers) >= 2 and len(text.split()) <= 28:
         return True
     return text.endswith(("AP", "dpa", "picture alliance")) and len(text.split()) <= 20
 

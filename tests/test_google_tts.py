@@ -120,6 +120,10 @@ def test_voice_name_for_article_uses_source_mapping() -> None:
         voice_name_for_article(_article("https://www.zeit.de/example", "DIE ZEIT"))
         == "de-DE-Chirp3-HD-Kore"
     )
+    assert (
+        voice_name_for_article(_article("https://www.spektrum.de/news/example/123", "Spektrum.de"))
+        == "de-DE-Chirp3-HD-Kore"
+    )
 
 
 def test_voice_name_for_article_rejects_unsupported_sources() -> None:

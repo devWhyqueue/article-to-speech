@@ -39,7 +39,7 @@ _GERMAN_MONTH_NAMES = {
     "november": "November",
     "dezember": "December",
 }
-_DATE_FORMATS = ("%d.%m.%Y, %H:%M", "%d. %B %Y, %H:%M", "%B %d, %Y, %I:%M %p")
+_DATE_FORMATS = ("%d.%m.%Y, %H:%M", "%d.%m.%Y", "%d. %B %Y, %H:%M", "%B %d, %Y, %I:%M %p")
 
 
 def _normalize_archive_text(text: str) -> str:

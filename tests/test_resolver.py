@@ -7,6 +7,7 @@ import pytest
 
 from article_to_speech.article.extractor import ArticleExtractor
 from article_to_speech.article.resolver import ArticleResolver
+from article_to_speech.article.source_detection import detect_supported_source
 from article_to_speech.browser.fetcher import BrowserPageFetcher, RenderedPage
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import ArticleResolutionError
@@ -17,6 +18,8 @@ class StubExtractor:
     def extract(self, *, url: str, final_url: str, html: str) -> ResolvedArticle | None:
         if "article" not in html:
             return None
+        source = detect_supported_source(url)
+        source_slug = source.slug if source is not None else "unknown"
         return ResolvedArticle(
             canonical_url=url,
             original_url=url,
@@ -27,7 +30,7 @@ class StubExtractor:
             author="Reporter",
             published_at="2026-03-26",
             body_text="Paragraph one.",
-            trace=("zeit",),
+            trace=(source_slug,),
         )
 
     def is_incomplete(self, article: ResolvedArticle) -> bool:
@@ -75,6 +78,22 @@ async def test_resolve_uses_archive_render_for_supported_source() -> None:
     assert article.trace == ("zeit", "archive_render")
     assert browser_fetcher.rendered_urls == [
         "https://www.zeit.de/2026/14/karin-prien-bundesfrauenministerin-gewalthilfegesetz-digitale-gewalt"
+    ]
+
+
+async def test_resolve_uses_archive_render_for_supported_spektrum_source() -> None:
+    resolver = ArticleResolver(_settings())
+    browser_fetcher = StubBrowserFetcher()
+    resolver._extractor = cast(ArticleExtractor, StubExtractor())
+    resolver._browser_fetcher = cast(BrowserPageFetcher, browser_fetcher)
+
+    article = await resolver.resolve(
+        "https://www.spektrum.de/news/was-ein-schimpansen-buergerkrieg-ueber-menschliche-konflikte-verraet/2319030"
+    )
+
+    assert article.trace == ("spektrum", "archive_render")
+    assert browser_fetcher.rendered_urls == [
+        "https://www.spektrum.de/news/was-ein-schimpansen-buergerkrieg-ueber-menschliche-konflikte-verraet/2319030"
     ]
 
 

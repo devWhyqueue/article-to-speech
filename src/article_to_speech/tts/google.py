@@ -30,6 +30,7 @@ _VOICE_NAME_BY_SOURCE = {
     "spiegel": "de-DE-Chirp3-HD-Kore",
     "sueddeutsche": "de-DE-Chirp3-HD-Kore",
     "faz": "de-DE-Chirp3-HD-Kore",
+    "spektrum": "de-DE-Chirp3-HD-Kore",
 }
 
 

@@ -5,10 +5,10 @@
 Windows:
 
 ```
-ssh ubuntu@89.168.90.195 -i C:\Users\yanni\.ssh\ssh-key-2023-09-20.key
+ssh ubuntu@89.168.90.195 -i <user_home>\.ssh\ssh-key-2023-09-20.key
 ```
 
-In WSL you can omit the -i argument.
+User home depends on Windows or WSL.
 
 - Note that on the server there is a pihole instance running and another Telegram bot service deployed, also using nginx. Do not interfere with them.
 

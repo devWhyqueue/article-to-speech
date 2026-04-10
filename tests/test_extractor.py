@@ -11,6 +11,39 @@ def _fixture(name: str) -> str:
     return (FIXTURE_DIR / name).read_text(encoding="utf-8")
 
 
+def test_extracts_spektrum_archive_snapshot_as_markdown() -> None:
+    article = ArticleExtractor().extract(
+        url=(
+            "https://www.spektrum.de/news/"
+            "was-ein-schimpansen-buergerkrieg-ueber-menschliche-konflikte-verraet/2319030"
+        ),
+        final_url="https://archive.is/PqXGV",
+        html=_fixture("spektrum_PqXGV.html"),
+    )
+
+    assert article is not None
+    assert article.source == "Spektrum.de"
+    assert article.title == "Was ein Schimpansen-Bürgerkrieg über menschliche Konflikte verrät"
+    assert article.author == "Lars Fischer"
+    assert article.published_at == "2026-04-10"
+    assert (
+        article.subtitle
+        and "Die Geschichte einer rätselhaften Schimpansengemeinschaft in Uganda hat eine unerwartete"
+        in article.subtitle
+    )
+    assert "Welche Schlüsse sich daraus für menschliche Gemeinschaften" in article.body_text
+    assert "© EyeEm Mobile GmbH / Getty Images / iStock / Getty Images Plus (Ausschnitt)" not in article.body_text
+    assert "Schwindender sozialer Zusammenhalt innerhalb von Schimpansengruppen" not in article.body_text
+    assert "Das könnte Sie auch interessieren" not in article.body_text
+    assert "Digitalpaket: Krieg und Frieden" not in article.body_text
+    assert "Diesen Artikel empfehlen" not in article.body_text
+    assert "WEITERLESEN MIT »SPEKTRUM +«" not in article.body_text
+    assert "Artikel zum Thema" not in article.body_text
+    assert "Themenkanäle" not in article.body_text
+    assert "SponsoredPartnerinhalte" not in article.body_text
+    assert "<div" not in article.body_text
+
+
 def test_extracts_zeit_archive_snapshot_as_markdown() -> None:
     article = ArticleExtractor().extract(
         url="https://www.zeit.de/2026/14/karin-prien-bundesfrauenministerin-gewalthilfegesetz-digitale-gewalt",

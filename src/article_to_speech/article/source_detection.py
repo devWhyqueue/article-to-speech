@@ -17,6 +17,7 @@ SUPPORTED_SOURCES: tuple[SupportedSource, ...] = (
     SupportedSource("nytimes", "The New York Times", ("nytimes.com",)),
     SupportedSource("sueddeutsche", "SZ.de", ("sueddeutsche.de", "sz.de")),
     SupportedSource("faz", "FAZ", ("faz.net",)),
+    SupportedSource("spektrum", "Spektrum.de", ("spektrum.de",)),
 )
 
 

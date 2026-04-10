@@ -112,6 +112,7 @@ def _extract_meta_title(soup: BeautifulSoup, config: SourceParserConfig) -> str 
         "nytimes": (" - The New York Times",),
         "sueddeutsche": (" - Meinung - SZ.de", " - SZ.de"),
         "faz": (" | FAZ",),
+        "spektrum": (" - Spektrum der Wissenschaft",),
     }[config.source.slug]
     for suffix in suffixes:
         if raw_title.endswith(suffix):
@@ -163,6 +164,7 @@ def _extract_author(article: Tag, flat_text: str, config: SourceParserConfig) ->
         "nytimes": r"By\s+(.+?)\s+Reporting from",
         "sueddeutsche": r"Kommentar von\s+(.+?)\s+\d{1,2}\.\s+[A-ZÄÖÜa-zäöü]+\s+\d{4}",
         "faz": r"Von\s+(.+?)\s+\d{2}\.\d{2}\.\d{4}",
+        "spektrum": r"(?mi)^von\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöüß-]+(?:\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß-]+){0,3})$",
     }[config.source.slug]
     match = re.search(pattern, flat_text, re.DOTALL)
     if match is None:
@@ -206,6 +208,7 @@ def _extract_markdown_body(
     seen: set[str] = set()
     started = False
     spiegel_paused = False
+    spektrum_skip_caption_followup = False
     zeit_ready = config.source.slug != "zeit" or not _contains_zeit_page_heading(article)
     for node in article.find_all(BODY_TAGS):
         if any(isinstance(child, Tag) and child.name in BODY_TAGS for child in node.children):
@@ -229,13 +232,20 @@ def _extract_markdown_body(
         if config.source.slug == "spiegel" and _is_spiegel_embedded_media_block(raw_text):
             spiegel_paused = True
             continue
+        if config.source.slug == "spektrum" and spektrum_skip_caption_followup:
+            spektrum_skip_caption_followup = False
+            if 6 <= len(raw_text.split()) <= 26 and raw_text.endswith("."):
+                continue
         if _contains_noise(raw_text, config) or _looks_like_caption(raw_text):
+            if config.source.slug == "spektrum" and _looks_like_caption(raw_text):
+                spektrum_skip_caption_followup = True
             continue
         if _is_stop_block(node, raw_text, config):
             if config.source.slug == "spiegel":
                 spiegel_paused = True
                 continue
             break
+        spektrum_skip_caption_followup = False
         if not started and (node.name in HEADING_TAGS or not _looks_like_body_paragraph(raw_text)):
             continue
         started = True
