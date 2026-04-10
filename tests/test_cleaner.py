@@ -104,6 +104,36 @@ def test_cleaner_trims_leading_site_chrome_labels() -> None:
     assert "Costa Rica said it had agreed to take up to 25 deportees a week from the United States." in cleaned
 
 
+def test_cleaner_deduplicates_repeated_intro_at_start_of_body() -> None:
+    formatter = NarrationFormatter()
+    article = ResolvedArticle(
+        canonical_url="https://example.com/article",
+        original_url="https://example.com/article",
+        final_url="https://example.com/article",
+        title="Example Title",
+        subtitle="Example subtitle that should only be spoken once.",
+        source=None,
+        author=None,
+        published_at=None,
+        body_text=(
+            "Example Title\n\n"
+            "Example subtitle that should only be spoken once.\n\n"
+            "Example Title\n\n"
+            "Example subtitle that should only be spoken once.\n\n"
+            "Actual first paragraph.\n\n"
+            "Actual second paragraph."
+        ),
+    )
+
+    cleaned = formatter.clean_article_text(article)
+
+    assert cleaned.startswith("Example Title\n\nExample subtitle that should only be spoken once.")
+    assert cleaned.count("Example Title") == 1
+    assert cleaned.count("Example subtitle that should only be spoken once.") == 1
+    assert "Actual first paragraph." in cleaned
+    assert "Actual second paragraph." in cleaned
+
+
 def test_cleaner_chunks_long_article_into_multiple_chunks() -> None:
     formatter = NarrationFormatter()
     formatter.max_tts_input_bytes = 450

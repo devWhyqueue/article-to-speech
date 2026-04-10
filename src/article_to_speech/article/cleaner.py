@@ -36,8 +36,8 @@ class NarrationFormatter:
 
     def clean_article_text(self, article: ResolvedArticle) -> str:
         """Convert markdown article content into narration-friendly plain text."""
-        body = self._clean_body(article)
         parts = self._intro_parts(article)
+        body = self._clean_body(article, parts)
         if body:
             parts.append(body)
         return "\n\n".join(parts)
@@ -50,8 +50,9 @@ class NarrationFormatter:
         return self._build_chunked_chunks(article)
 
     def _build_chunked_chunks(self, article: ResolvedArticle) -> list[NarrationChunk]:
-        intro_text = "\n\n".join(self._intro_parts(article)).strip()
-        body = self._clean_body(article)
+        intro_parts = self._intro_parts(article)
+        intro_text = "\n\n".join(intro_parts).strip()
+        body = self._clean_body(article, intro_parts)
         body_segments = self._split_body_segments(body, self.max_tts_input_bytes)
         chunk_texts = self._assemble_chunk_texts(
             intro_text, body_segments, self.max_tts_input_bytes
@@ -138,17 +139,15 @@ class NarrationFormatter:
             remaining = remaining[split_at:].strip()
         return chunks
 
-    def _clean_body(self, article: ResolvedArticle) -> str:
+    def _clean_body(self, article: ResolvedArticle, intro_parts: list[str]) -> str:
         body = MULTI_NEWLINE_PATTERN.sub("\n\n", _clean_markdown_body(article.body_text)).strip()
-        body = _trim_leading_noise(body)
-        body = _trim_trailing_noise_sections(body)
+        body = _strip_leading_intro_duplicates(
+            _trim_trailing_noise_sections(_trim_leading_noise(body)), intro_parts
+        )
         return body.replace(HEADING_SENTINEL, "")
 
     def _intro_parts(self, article: ResolvedArticle) -> list[str]:
-        parts = [article.title]
-        if article.subtitle:
-            parts.append(article.subtitle)
-        return parts
+        return [article.title, article.subtitle] if article.subtitle else [article.title]
 
     def _fits_budget(self, text: str, text_budget: int | None = None) -> bool:
         budget = self.max_tts_input_bytes if text_budget is None else text_budget
@@ -176,11 +175,11 @@ def _clean_markdown_body(body_text: str) -> str:
 
 
 def _looks_like_chrome_label(text: str) -> bool:
-    if not SHORT_LABEL_PATTERN.match(text):
-        return False
-    if any(character in text for character in ".!?"):
-        return False
-    return len(text.split()) <= 5
+    return bool(
+        SHORT_LABEL_PATTERN.match(text)
+        and not any(character in text for character in ".!?")
+        and len(text.split()) <= 5
+    )
 
 
 def _trim_leading_noise(text: str) -> str:
@@ -207,6 +206,21 @@ def _trim_trailing_noise_sections(text: str) -> str:
         if any(lowered.startswith(prefix) for prefix in TRAILING_SECTION_PREFIXES):
             return "\n".join(lines[:index]).strip()
     return "\n".join(lines).strip()
+
+
+def _strip_leading_intro_duplicates(text: str, intro_parts: list[str]) -> str:
+    if not text or not intro_parts:
+        return text
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n") if paragraph.strip()]
+    intro_sequence = [part.strip() for part in intro_parts if part and part.strip()]
+    if not paragraphs or not intro_sequence:
+        return text
+    while paragraphs[: len(intro_sequence)] == intro_sequence:
+        paragraphs = paragraphs[len(intro_sequence) :]
+    intro_set = set(intro_sequence)
+    while paragraphs and paragraphs[0] in intro_set:
+        paragraphs = paragraphs[1:]
+    return "\n\n".join(paragraphs)
 
 
 def _looks_like_sentence(text: str) -> bool:
