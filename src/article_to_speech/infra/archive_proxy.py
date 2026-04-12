@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -9,6 +10,7 @@ import httpx
 
 ARCHIVE_BASE_URL = "https://archive.is/"
 ARCHIVE_PROXY_TEST_TIMEOUT_SECONDS = 10.0
+ARCHIVE_PROXY_DISCOVERY_BATCH_SIZE = 5
 LOGGER = logging.getLogger(__name__)
 
 
@@ -16,12 +18,6 @@ class ProxySettings(TypedDict):
     server: str
     username: NotRequired[str]
     password: NotRequired[str]
-
-
-def archive_launch_proxies(proxy_urls: tuple[str, ...]) -> tuple[ProxySettings | None, ...]:
-    """Return configured archive proxies in order, plus a final direct attempt."""
-    proxies = tuple(parse_proxy_settings(url) for url in proxy_urls)
-    return (*proxies, None)
 
 
 def parse_proxy_settings(proxy_url: str) -> ProxySettings:
@@ -64,12 +60,83 @@ async def resolve_archive_proxy_urls(
     if not refreshed_candidates:
         write_cached_archive_proxy_urls(cache_path, ())
         return ()
-    working_urls = await filter_reachable_archive_proxy_urls(
+    LOGGER.info(
+        "archive_proxy_bootstrap_started",
+        extra={
+            "context": {
+                "candidate_count": len(refreshed_candidates),
+                "batch_size": ARCHIVE_PROXY_DISCOVERY_BATCH_SIZE,
+            }
+        },
+    )
+    working_urls = await discover_archive_proxy_urls(
         refreshed_candidates,
         user_agent=user_agent,
     )
     write_cached_archive_proxy_urls(cache_path, working_urls)
     return working_urls
+
+
+async def discover_archive_proxy_urls(
+    proxy_urls: tuple[str, ...],
+    *,
+    user_agent: str,
+    batch_size: int = ARCHIVE_PROXY_DISCOVERY_BATCH_SIZE,
+) -> tuple[str, ...]:
+    """Return the first working proxy discovered from the candidate list."""
+    for start in range(0, len(proxy_urls), batch_size):
+        batch = proxy_urls[start : start + batch_size]
+        if first_working_proxy := await _first_reachable_archive_proxy_url_in_batch(
+            batch,
+            user_agent=user_agent,
+        ):
+            LOGGER.info(
+                "archive_proxy_bootstrap_succeeded",
+                extra={
+                    "context": {
+                        "proxy_url": redact_proxy_url(first_working_proxy),
+                        "candidate_offset": start,
+                    }
+                },
+            )
+            return (first_working_proxy,)
+    LOGGER.warning(
+        "archive_proxy_bootstrap_exhausted",
+        extra={"context": {"candidate_count": len(proxy_urls)}},
+    )
+    return ()
+
+
+async def _first_reachable_archive_proxy_url_in_batch(
+    proxy_urls: tuple[str, ...],
+    *,
+    user_agent: str,
+) -> str | None:
+    tasks = {
+        asyncio.create_task(
+            archive_proxy_reaches_archive(proxy_url, user_agent=user_agent)
+        ): proxy_url
+        for proxy_url in proxy_urls
+    }
+    try:
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                proxy_url = tasks[task]
+                if not task.result():
+                    continue
+                for pending_task in pending:
+                    pending_task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                return proxy_url
+        return None
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def download_archive_proxy_urls(proxy_list_url: str) -> tuple[str, ...]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
@@ -15,6 +16,7 @@ from article_to_speech.infra.archive_proxy import (
 )
 
 ARCHIVE_BASE_URL = "https://archive.is/"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -81,6 +83,10 @@ class BrowserPageFetcher:
         cached_proxy_urls = self._archive_proxy_urls_cache
         if cached_proxy_urls is None or proxy_url not in cached_proxy_urls:
             return
+        LOGGER.warning(
+            "archive_proxy_dropped_from_cache",
+            extra={"context": {"proxy_url": proxy_url}},
+        )
         self._archive_proxy_urls_cache = tuple(
             candidate_proxy_url
             for candidate_proxy_url in cached_proxy_urls
