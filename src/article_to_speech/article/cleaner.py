@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import re
 
+from article_to_speech.article_helpers import (
+    _hard_split_index_for_budget,
+    _split_index_for_budget,
+    _utf8_len,
+)
 from article_to_speech.core.models import NarrationChunk, ResolvedArticle
 
 WHITESPACE_PATTERN = re.compile(r"[ \t]+")
@@ -233,24 +238,3 @@ def _looks_like_sentence(text: str) -> bool:
 def _split_into_sentences(text: str) -> list[str]:
     parts = re.split(r"(?<=[.!?])\s+", text)
     return [part.strip() for part in parts if part.strip()]
-
-
-def _utf8_len(text: str) -> int:
-    return len(text.encode("utf-8"))
-
-
-def _split_index_for_budget(text: str, text_budget: int) -> int:
-    best_index = -1
-    for index, character in enumerate(text):
-        if _utf8_len(text[: index + 1]) > text_budget:
-            break
-        if character == " ":
-            best_index = index
-    return best_index
-
-
-def _hard_split_index_for_budget(text: str, text_budget: int) -> int:
-    for index in range(1, len(text) + 1):
-        if _utf8_len(text[:index]) > text_budget:
-            return index - 1
-    return len(text)

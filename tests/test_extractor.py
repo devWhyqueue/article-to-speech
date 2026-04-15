@@ -281,3 +281,83 @@ def test_extracts_spiegel_archive_without_embedded_media_controls() -> None:
     assert "Spielen/Pause" not in article.body_text
     assert "Tastaturkürzel" not in article.body_text
     assert "Weitere Videos" not in article.body_text
+
+
+def test_extracts_spiegel_archive_without_nested_teaser_articles() -> None:
+    article = ArticleExtractor().extract(
+        url=(
+            "https://www.spiegel.de/ausland/"
+            "viktor-orban-abgewaehlt-demokratien-koennen-sich-selbst-heilen-"
+            "ungarn-hat-es-gerade-bewiesen-a-8a39144a-57d8-4945-8bdf-e968c2de83c2"
+        ),
+        final_url="https://archive.is/example",
+        html="""
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <title>Demokratien können sich selbst heilen. Ungarn hat es gerade bewiesen - DER SPIEGEL</title>
+  </head>
+  <body>
+    <main>
+      <article aria-label="Demokratien können sich selbst heilen. Ungarn hat es gerade bewiesen">
+        <h2>Der SPIEGEL-Leitartikel von Mathieu von Rohr</h2>
+        <h1>Demokratien können sich selbst heilen. Ungarn hat es gerade bewiesen</h1>
+        <div>
+          Viktor Orbán war das Vorbild für autoritäre Rechte von Washington bis Warschau.
+          Nach seiner historischen Niederlage müssen sie ihr Drehbuch neu schreiben.
+        </div>
+        <div>Von Mathieu von Rohr</div>
+        <time datetime="2026-04-15T08:00:00Z">15.04.2026, 08.00 Uhr</time>
+        <div>
+          Selten hat eine Wahl in einem so kleinen Land weltweit so viel Aufmerksamkeit
+          erhalten. Ungarn hat kaum mehr Einwohner als die Schweiz, eine Wirtschaft so
+          groß wie die Region München – und doch ist es zum Testfall für eine Frage
+          geworden, die weit über das Land hinausweist: Lässt sich ein autoritäres
+          System wie das Viktor Orbáns noch demokratisch abwählen – und wenn ja, wie?
+        </div>
+        <div>
+          Die Antwort fiel so klar aus, wie es vor wenigen Monaten kaum jemand für
+          möglich gehalten hätte: Die Tisza-Partei des Oppositionsführers Péter Magyar
+          kommt auf 138 der 199 Sitze – mehr als eine Zweidrittelmehrheit.
+        </div>
+        <h2>Kein Kulturkampf</h2>
+        <div>
+          Magyar ließ sich von dieser Unzufriedenheit ins Amt tragen. Er verweigerte
+          sich Orbáns Lieblingsthema: dem Kulturkampf. Mit Migrations- und Genderfragen
+          kam der Premier nicht an gegen den Konservativen, der einst selbst zu Fidesz
+          gehörte.
+        </div>
+        <div>
+          Dennoch hat Ungarn in dieser Nacht Geschichte geschrieben. Demokratien können
+          sich selbst heilen. Der Autoritarismus ist nach dieser Nacht keineswegs am
+          Ende, aber sein Siegeszug ist kein Naturgesetz.
+        </div>
+        <section>
+          <article aria-label="Cancer drugs are getting more expensive">
+            <div>Cancer drugs are getting more expensive, and patients are paying the price.</div>
+          </article>
+          <article aria-label="Melania Trump keeps a careful distance">
+            <div>Melania Trump keeps a careful distance from the campaign trail.</div>
+          </article>
+        </section>
+      </article>
+    </main>
+  </body>
+</html>
+""",
+    )
+
+    assert article is not None
+    assert article.source == "DER SPIEGEL"
+    assert article.title == "Demokratien können sich selbst heilen. Ungarn hat es gerade bewiesen"
+    assert article.subtitle and "Viktor Orbán war das Vorbild für autoritäre Rechte" in article.subtitle
+    assert "Nach seiner historischen Niederlage müssen sie ihr Drehbuch neu schreiben." in (
+        article.subtitle
+    )
+    assert article.author == "Mathieu von Rohr"
+    assert article.published_at == "2026-04-15"
+    assert "Selten hat eine Wahl in einem so kleinen Land" in article.body_text
+    assert "## Kein Kulturkampf" in article.body_text
+    assert "Dennoch hat Ungarn in dieser Nacht Geschichte geschrieben." in article.body_text
+    assert "Cancer drugs are getting more expensive" not in article.body_text
+    assert "Melania Trump keeps a careful distance" not in article.body_text

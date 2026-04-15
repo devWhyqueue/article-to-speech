@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Final
 
 from bs4.element import Tag
 
 from article_to_speech.article import _normalize_archive_text, _normalize_publication_date
-from article_to_speech.article.source_detection import SupportedSource
+from article_to_speech.article_helpers import SourceParserConfig
 
 DROP_SELECTORS: Final[tuple[str, ...]] = (
     "aside",
@@ -30,114 +29,6 @@ DROP_SELECTORS: Final[tuple[str, ...]] = (
 BODY_TAGS: Final[tuple[str, ...]] = ("div", "p", "blockquote", "h2", "h3")
 HEADING_TAGS: Final[set[str]] = {"h2", "h3"}
 QUOTE_TAGS: Final[set[str]] = {"blockquote"}
-
-
-@dataclass(frozen=True, slots=True)
-class SourceParserConfig:
-    source: SupportedSource
-    noise_markers: tuple[str, ...]
-    stop_markers: tuple[str, ...]
-
-
-CONFIG_BY_SLUG: Final[dict[str, SourceParserConfig]] = {
-    "zeit": SourceParserConfig(
-        source=SupportedSource("zeit", "DIE ZEIT", ("zeit.de",)),
-        noise_markers=(
-            "artikel verschenken",
-            "aus der zeit nr.",
-            "artikel aus die zeit",
-            "veröffentlicht am",
-            "erschienen in",
-            "gedruckte version anzeigen",
-            "artikelzusammenfassung",
-            "diese zusammenfassung wurde",
-            "fanden sie die zusammenfassung hilfreich",
-            "die audioversion dieses artikels wurde künstlich erzeugt",
-            "wir entwickeln dieses angebot stetig weiter",
-            "newsletter",
-            "kommentare",
-            "feedback senden",
-            "© gene glover",
-        ),
-        stop_markers=("1 kommentar", "kommentare", "exakt mein gedankengang"),
-    ),
-    "spiegel": SourceParserConfig(
-        source=SupportedSource("spiegel", "DER SPIEGEL", ("spiegel.de",)),
-        noise_markers=(
-            "bild vergrößern",
-            "zur merkliste hinzufügen",
-            "artikel anhören",
-            "weitere optionen zum teilen",
-            "dieser artikel gehört zum angebot von spiegel+",
-            "foto:",
-            "messenger whatsapp",
-        ),
-        stop_markers=("anzeige", "mehr zum thema", "startseite", "kommentare"),
-    ),
-    "nytimes": SourceParserConfig(
-        source=SupportedSource("nytimes", "The New York Times", ("nytimes.com",)),
-        noise_markers=(
-            "advertisement",
-            "skip advertisement",
-            "share full article",
-            "supported by",
-            "listen ·",
-            "credit...",
-            "static01.nyt.com is blocked",
-        ),
-        stop_markers=("related coverage", "more on", "comments"),
-    ),
-    "sueddeutsche": SourceParserConfig(
-        source=SupportedSource("sueddeutsche", "SZ.de", ("sueddeutsche.de", "sz.de")),
-        noise_markers=(
-            "home meinung",
-            "artikel anhören",
-            "anhören",
-            "merken",
-            "teilen",
-            "feedback",
-            "drucken",
-            "kommentare",
-            "lesezeit:",
-        ),
-        stop_markers=("kuba :", "mehr zum thema", "kommentare"),
-    ),
-    "faz": SourceParserConfig(
-        source=SupportedSource("faz", "FAZ", ("faz.net",)),
-        noise_markers=(
-            "anhören",
-            "merken",
-            "teilen",
-            "verschenken",
-            "drucken",
-            "zur app",
-            "lesezeit:",
-        ),
-        stop_markers=("mehr zum thema", "kommentare"),
-    ),
-    "spektrum": SourceParserConfig(
-        source=SupportedSource("spektrum", "Spektrum.de", ("spektrum.de",)),
-        noise_markers=(
-            "direkt zum inhalt",
-            "spektrum.de logo",
-            "lesedauer",
-            "drucken",
-            "teilen",
-            "jetzt testen",
-            "sie haben bereits ein abo",
-            "bitte erlauben sie javascript",
-        ),
-        stop_markers=(
-            "das könnte sie auch interessieren",
-            "diesen artikel empfehlen",
-            "weiterlesen mit »spektrum +«",
-            "artikel zum thema",
-            "themenkanäle",
-            "sponsoredpartnerinhalte",
-            "schreiben sie uns",
-        ),
-    ),
-}
 
 
 def extract_published_at(flat_text: str) -> str | None:

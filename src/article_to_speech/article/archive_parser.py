@@ -7,6 +7,7 @@ from bs4.element import Tag
 
 from article_to_speech.article import (
     _clone_article,
+    _drop_nested_articles,
     _drop_spiegel_ad_sections,
     _is_spiegel_embedded_media_block,
     _normalize_archive_text,
@@ -14,10 +15,8 @@ from article_to_speech.article import (
 )
 from article_to_speech.article.parser_config import (
     BODY_TAGS,
-    CONFIG_BY_SLUG,
     DROP_SELECTORS,
     HEADING_TAGS,
-    SourceParserConfig,
     _contains_noise,
     _contains_zeit_page_heading,
     _extract_spiegel_subtitle_candidate,
@@ -29,6 +28,12 @@ from article_to_speech.article.parser_config import (
     extract_published_at,
 )
 from article_to_speech.article.source_detection import detect_supported_source
+from article_to_speech.article_helpers import (
+    CONFIG_BY_SLUG,
+    SourceParserConfig,
+    _extract_body_lead,
+    _looks_like_subtitle,
+)
 from article_to_speech.core.models import ResolvedArticle
 
 
@@ -43,6 +48,7 @@ def parse_supported_archive_article(url: str, final_url: str, html: str) -> Reso
     if article is None:
         return None
     article = _clone_article(article)
+    _drop_nested_articles(article)
     _drop_noise_nodes(article, config)
     return _build_article(url, final_url, soup, article, config)
 
@@ -140,20 +146,6 @@ def _extract_subtitle(article: Tag, title: str, config: SourceParserConfig) -> s
     return None
 
 
-def _looks_like_subtitle(text: str, title: str, config: SourceParserConfig) -> bool:
-    if not text or text == title or _contains_noise(text, config) or _looks_like_caption(text):
-        return False
-    lowered = text.lower()
-    if any(
-        marker in lowered
-        for marker in ("von ", "by ", "kommentar von ", "interview:", "aktualisiert am")
-    ):
-        return False
-    if text.endswith(("Uhr", "ET")):
-        return False
-    return len(text.split()) >= 10 and any(mark in text for mark in '.!?”“"')
-
-
 def _extract_author(article: Tag, flat_text: str, config: SourceParserConfig) -> str | None:
     if config.source.slug == "spiegel":
         if author := _extract_spiegel_author(article):
@@ -189,10 +181,6 @@ def _extract_published_at(article: Tag, flat_text: str, config: SourceParserConf
             if published_at is not None:
                 return published_at
     return extract_published_at(flat_text)
-
-
-def _extract_body_lead(body_text: str | None) -> str | None:
-    return body_text.partition("\n\n")[0] or None if body_text else None
 
 
 def _extract_markdown_body(

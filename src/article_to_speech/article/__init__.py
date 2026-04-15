@@ -65,6 +65,11 @@ def _clone_article(article: Tag) -> Tag:
     return clone
 
 
+def _drop_nested_articles(article: Tag) -> None:
+    for nested_article in article.find_all("article"):
+        nested_article.decompose()
+
+
 def _drop_spiegel_ad_sections(article: Tag) -> None:
     for node in article.find_all(("div", "section")):
         text = _normalize_archive_text(node.get_text(" ", strip=True)).lower()
