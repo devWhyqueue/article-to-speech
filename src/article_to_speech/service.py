@@ -9,6 +9,7 @@ from article_to_speech.article.cleaner import NarrationFormatter
 from article_to_speech.article.resolver import ArticleResolver
 from article_to_speech.core.config import Settings
 from article_to_speech.core.exceptions import (
+    ArchivedPaywallError,
     ArticleToSpeechError,
     InvalidUrlError,
     TelegramConflictError,
@@ -22,6 +23,10 @@ from article_to_speech.tts.google import GoogleTextToSpeechSynthesizer
 
 LOGGER = logging.getLogger(__name__)
 PROCESSING_REACTION_EMOJI = "⏳"
+ARCHIVED_PAYWALL_FEEDBACK = (
+    "Could not process that article: the archive snapshot still shows the SPIEGEL+ paywall, "
+    "so no audio was generated."
+)
 
 
 class ArticleToSpeechService:
@@ -89,6 +94,15 @@ class ArticleToSpeechService:
                 )
                 completed_job = replace(processing_job, status=JobStatus.SUCCEEDED)
                 return JobResult(job=completed_job, article=article, audio=audio, caption=caption)
+            except ArchivedPaywallError as error:
+                self._store.mark_failed(job.job_id, str(error))
+                LOGGER.info(
+                    "process_job_paywall_detected",
+                    extra={"context": {"job_id": job.job_id, "error": str(error)}},
+                )
+                if notify_failures:
+                    await self._telegram.send_message(job.chat_id, ARCHIVED_PAYWALL_FEEDBACK)
+                return None
             except ArticleToSpeechError as error:
                 self._store.mark_failed(job.job_id, str(error))
                 LOGGER.error(

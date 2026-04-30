@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from article_to_speech.article.extractor import ArticleExtractor
+from article_to_speech.core.exceptions import ArchivedPaywallError
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "archive"
 
@@ -153,6 +156,43 @@ def test_extracts_spiegel_archive_snapshot_ctofu_as_markdown() -> None:
     assert "Bei Amazon bestellen" not in article.body_text
     assert "Preisabfragezeitpunkt" not in article.body_text
     assert "DER SPIEGEL Zur Startseite" not in article.body_text
+
+
+def test_rejects_spiegel_archive_snapshot_that_only_contains_paywall() -> None:
+    html = """
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <title>Analyse zur Bundesregierung - DER SPIEGEL</title>
+  </head>
+  <body>
+    <main>
+      <article>
+        <h1>Analyse zur Bundesregierung</h1>
+        <h2>Wie sich die Koalition in den kommenden Wochen sortieren muss.</h2>
+        <div>DER SPIEGEL</div>
+        <div>SPIEGEL+</div>
+        <div>Mehr Perspektiven, mehr verstehen.</div>
+        <div>Inklusive digitaler Ausgabe des wöchentlichen Magazins.</div>
+        <div>4 Wochen für 1 Euro</div>
+        <div>Jetzt anmelden</div>
+        <div>Bereits Abonnent? Hier einloggen.</div>
+        <div>Als Abonnent:in können Sie diesen Monat noch 3 Artikel verschenken.</div>
+        <div>Verschenkte Artikel sind ohne Abonnement lesbar.</div>
+      </article>
+    </main>
+  </body>
+</html>
+"""
+
+    with pytest.raises(
+        ArchivedPaywallError, match="Archive snapshot still shows the SPIEGEL\\+ paywall"
+    ):
+        ArticleExtractor().extract(
+            url="https://www.spiegel.de/politik/deutschland/example.html",
+            final_url="https://archive.is/example",
+            html=html,
+        )
 
 
 def test_extracts_sz_archive_snapshot_as_markdown() -> None:

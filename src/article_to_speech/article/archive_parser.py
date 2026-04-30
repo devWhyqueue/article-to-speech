@@ -10,6 +10,7 @@ from article_to_speech.article import (
     _drop_nested_articles,
     _drop_spiegel_ad_sections,
     _is_spiegel_embedded_media_block,
+    _looks_like_spiegel_paywall,
     _normalize_archive_text,
     _select_main_article,
 )
@@ -34,6 +35,7 @@ from article_to_speech.article_helpers import (
     _extract_body_lead,
     _looks_like_subtitle,
 )
+from article_to_speech.core.exceptions import ArchivedPaywallError
 from article_to_speech.core.models import ResolvedArticle
 
 
@@ -74,6 +76,8 @@ def _build_article(
             body_text = _extract_markdown_body(
                 article, title, subtitle, author, published_at, config
             )
+    if config.source.slug == "spiegel" and _looks_like_spiegel_paywall(article, body_text):
+        raise ArchivedPaywallError("Archive snapshot still shows the SPIEGEL+ paywall")
     if body_text is None:
         return None
     return ResolvedArticle(

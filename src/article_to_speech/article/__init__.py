@@ -84,6 +84,34 @@ def _is_spiegel_embedded_media_block(text: str) -> bool:
     return any(marker in lowered for marker in _SPIEGEL_EMBEDDED_MEDIA_MARKERS)
 
 
+def _looks_like_spiegel_paywall(article: Tag, body_text: str | None) -> bool:
+    article_text = _normalize_archive_text(article.get_text("\n", strip=True)).lower()
+    paywall_markers = (
+        "spiegel+",
+        "4 wochen für 1 euro",
+        "jetzt anmelden",
+        "bereits abonnent",
+        "als abonnent:in können sie diesen monat noch",
+        "verschenkte artikel sind ohne abonnement lesbar",
+        "mehr perspektiven, mehr verstehen",
+        "inklusive digitaler ausgabe des wöchentlichen magazins",
+    )
+    marker_hits = sum(marker in article_text for marker in paywall_markers)
+    if marker_hits < 3:
+        return False
+    if body_text is None:
+        return True
+    body_lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    prose_lines = [
+        line
+        for line in body_lines
+        if not line.startswith("## ")
+        and len(line.split()) >= 12
+        and any(mark in line for mark in (".", "?", "!", "”", '"'))
+    ]
+    return len(prose_lines) < 2
+
+
 def _normalize_publication_date(raw_value: str) -> str:
     cleaned = re.sub(r"\s+", " ", raw_value).strip()
     for german, english in _GERMAN_MONTH_NAMES.items():

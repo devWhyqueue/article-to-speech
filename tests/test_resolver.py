@@ -10,7 +10,7 @@ from article_to_speech.article.resolver import ArticleResolver
 from article_to_speech.article.source_detection import detect_supported_source
 from article_to_speech.browser.fetcher import BrowserPageFetcher, RenderedPage
 from article_to_speech.core.config import Settings
-from article_to_speech.core.exceptions import ArticleResolutionError
+from article_to_speech.core.exceptions import ArchivedPaywallError, ArticleResolutionError
 from article_to_speech.core.models import ResolvedArticle
 
 
@@ -115,3 +115,20 @@ async def test_resolve_surfaces_archive_render_errors() -> None:
 
     with pytest.raises(ArticleResolutionError, match="Archive lookup returned no results"):
         await resolver.resolve("https://www.faz.net/aktuell/politik/example.html")
+
+
+async def test_resolve_surfaces_archived_paywall_errors() -> None:
+    resolver = ArticleResolver(_settings())
+
+    class PaywalledExtractor:
+        def extract(self, *, url: str, final_url: str, html: str) -> ResolvedArticle | None:
+            raise ArchivedPaywallError("Archive snapshot still shows the SPIEGEL+ paywall")
+
+        def is_incomplete(self, article: ResolvedArticle) -> bool:
+            return False
+
+    resolver._extractor = cast(ArticleExtractor, PaywalledExtractor())
+    resolver._browser_fetcher = cast(BrowserPageFetcher, StubBrowserFetcher())
+
+    with pytest.raises(ArchivedPaywallError, match="SPIEGEL\\+ paywall"):
+        await resolver.resolve("https://www.spiegel.de/politik/deutschland/example.html")

@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from article_to_speech.core.exceptions import ArchivedPaywallError, SpeechSynthesisError
 from article_to_speech.core.models import AudioArtifact, IncomingUrlJob, JobStatus, ResolvedArticle
-from article_to_speech.core.exceptions import SpeechSynthesisError
-from article_to_speech.service import ArticleToSpeechService
+from article_to_speech.service import ARCHIVED_PAYWALL_FEEDBACK, ArticleToSpeechService
 from article_to_speech.telegram_support import build_caption
 
 
@@ -96,6 +96,14 @@ class StubResolver:
 
     async def resolve(self, input_url: str) -> ResolvedArticle:
         return self.article
+
+    async def close(self) -> None:
+        return None
+
+
+class PaywalledStubResolver:
+    async def resolve(self, input_url: str) -> ResolvedArticle:
+        raise ArchivedPaywallError("Archive snapshot still shows the SPIEGEL+ paywall")
 
     async def close(self) -> None:
         return None
@@ -283,6 +291,35 @@ async def test_process_job_surfaces_synthesis_failures_to_telegram() -> None:
 
     assert result is None
     assert telegram.messages[-1] == (123, "Could not process that article: Google TTS request failed")
+
+
+async def test_process_job_sends_dedicated_feedback_for_archived_spiegel_paywall() -> None:
+    telegram = StubTelegram()
+    synthesizer = StubSynthesizer()
+    service = ArticleToSpeechService(
+        settings=cast(Any, object()),
+        store=cast(Any, StubStore()),
+        telegram=cast(Any, telegram),
+        resolver=cast(Any, PaywalledStubResolver()),
+        synthesizer=cast(Any, synthesizer),
+        formatter=cast(Any, StubFormatter()),
+    )
+    job = IncomingUrlJob(
+        job_id=1,
+        chat_id=123,
+        message_id=99,
+        input_url="https://www.spiegel.de/politik/deutschland/example.html",
+        created_at=datetime.now(UTC),
+        status=JobStatus.QUEUED,
+        attempts=0,
+    )
+
+    result = await service.process_job(job, notify_failures=True)
+
+    assert result is None
+    assert telegram.messages == [(123, ARCHIVED_PAYWALL_FEEDBACK)]
+    assert telegram.audio_calls == []
+    assert synthesizer.chunks == []
 
 
 async def test_process_job_skips_duplicate_non_queued_job() -> None:

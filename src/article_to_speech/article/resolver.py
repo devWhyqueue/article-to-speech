@@ -7,7 +7,7 @@ from article_to_speech.article.extractor import ArticleExtractor
 from article_to_speech.article.source_detection import detect_supported_source
 from article_to_speech.browser.fetcher import BrowserPageFetcher
 from article_to_speech.core.config import Settings
-from article_to_speech.core.exceptions import ArticleResolutionError
+from article_to_speech.core.exceptions import ArchivedPaywallError, ArticleResolutionError
 from article_to_speech.core.models import ResolvedArticle
 from article_to_speech.core.urls import normalize_url
 
@@ -47,6 +47,8 @@ class ArticleResolver:
             final_url=rendered_page.final_url,
             html=rendered_page.html,
         )
+        if article is not None and article.paywalled:
+            raise ArchivedPaywallError("Archive snapshot still shows the SPIEGEL+ paywall")
         if article is None or self._extractor.is_incomplete(article):
             raise ArticleResolutionError(
                 f"Failed to parse supported archive snapshot for {normalized_url}"

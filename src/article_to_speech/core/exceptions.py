@@ -14,6 +14,10 @@ class ArticleResolutionError(ArticleToSpeechError):
     """Raised when article resolution cannot produce a full article."""
 
 
+class ArchivedPaywallError(ArticleResolutionError):
+    """Raised when an archive snapshot only contains publisher paywall content."""
+
+
 class BrowserAutomationError(ArticleToSpeechError):
     """Raised for browser automation failures."""
 

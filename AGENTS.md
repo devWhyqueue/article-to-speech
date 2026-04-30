@@ -1,4 +1,4 @@
-- Make skill clean code with option --minimal pass without violations after implementation.
+- Make skill clean code pass without violations after implementation.
 
 - You can take a look at the deployment with command:
 
