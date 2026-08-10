@@ -46,6 +46,29 @@ def test_cleaner_drops_boilerplate_lines() -> None:
     assert "Actual paragraph." in cleaned
 
 
+def test_cleaner_drops_bare_chart_data_point_lines() -> None:
+    formatter = NarrationFormatter()
+    article = ResolvedArticle(
+        canonical_url="https://example.com/article",
+        original_url="https://example.com/article",
+        final_url="https://example.com/article",
+        title="Example",
+        subtitle=None,
+        source=None,
+        author=None,
+        published_at=None,
+        body_text=(
+            "Nutze die Pfeiltasten zum navigieren.\n\n"
+            "Mai 2026 12.421\n\n21.292\n\n22.324\n\n22.714\n\n23.931\n\n"
+            "Nur noch 12.421 neu registrierte IT-Stellen wurden gezählt."
+        ),
+    )
+    cleaned = formatter.clean_article_text(article)
+    assert "\n\n21.292\n\n" not in cleaned
+    assert "\n\n22.324\n\n" not in cleaned
+    assert "Nur noch 12.421 neu registrierte IT-Stellen wurden gezählt." in cleaned
+
+
 def test_cleaner_trims_trailing_related_content_sections() -> None:
     formatter = NarrationFormatter()
     article = ResolvedArticle(

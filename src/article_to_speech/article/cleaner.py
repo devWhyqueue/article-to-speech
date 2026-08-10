@@ -8,6 +8,10 @@ from article_to_speech.core.models import NarrationChunk, ResolvedArticle
 WHITESPACE_PATTERN = re.compile(r"[ \t]+")
 MULTI_NEWLINE_PATTERN = re.compile(r"\n{3,}")
 SHORT_LABEL_PATTERN = re.compile(r"^[A-Z0-9][A-Za-z0-9'’&:/ -]{0,48}$")
+# Bare data-point lines from scraped chart/graph widgets (e.g. "12.421", one per
+# line). Real prose never puts a lone number on its own line; dropping these
+# also removes long unpunctuated digit runs that Google TTS rejects outright.
+BARE_NUMBER_PATTERN = re.compile(r"^[\d.,]+\*?$")
 MARKDOWN_HEADING_PATTERN = re.compile(r"^#{1,6}\s+")
 MARKDOWN_QUOTE_PATTERN = re.compile(r"^>\s*")
 BOILERPLATE_PREFIXES = (
@@ -87,7 +91,11 @@ def _clean_markdown_body(body_text: str) -> str:
             lines.append(f"{HEADING_SENTINEL}{stripped}")
             continue
         lowered = stripped.lower()
-        if lowered.startswith(BOILERPLATE_PREFIXES) or _looks_like_chrome_label(stripped):
+        if (
+            lowered.startswith(BOILERPLATE_PREFIXES)
+            or _looks_like_chrome_label(stripped)
+            or BARE_NUMBER_PATTERN.match(stripped) is not None
+        ):
             continue
         lines.append(stripped)
     return "\n".join(lines)
