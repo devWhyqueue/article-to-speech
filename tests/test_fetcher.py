@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from playwright.async_api import TimeoutError
 
@@ -20,14 +21,15 @@ from article_to_speech.infra.archive_proxy import (
     ARCHIVE_PROXY_DISCOVERY_BATCH_SIZE,
     ProxySettings,
     archive_proxy_reaches_archive,
-    discover_archive_proxy_urls,
     dedupe_proxy_urls,
+    discover_archive_proxy_urls,
     filter_reachable_archive_proxy_urls,
     load_cached_archive_proxy_urls,
     parse_proxy_list,
     parse_proxy_settings,
     redact_proxy_url,
     resolve_archive_proxy_urls,
+    resolve_hostname_via_doh,
     write_cached_archive_proxy_urls,
 )
 
@@ -481,6 +483,59 @@ async def test_archive_proxy_reaches_archive_rejects_proxy_side_block(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_resolve_hostname_via_doh_extracts_a_record(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "Answer": [
+                    {"type": 5, "data": "cname.example"},
+                    {"type": 1, "data": "1.2.3.4"},
+                ]
+            }
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url: str, **kwargs: object) -> FakeResponse:
+            assert url == "https://cloudflare-dns.com/dns-query"
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.httpx.AsyncClient",
+        lambda **_: FakeClient(),
+    )
+
+    assert await resolve_hostname_via_doh("archive.is") == "1.2.3.4"
+
+
+@pytest.mark.asyncio
+async def test_resolve_hostname_via_doh_returns_none_on_failure(monkeypatch) -> None:
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url: str, **kwargs: object) -> None:
+            raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(
+        "article_to_speech.infra.archive_proxy.httpx.AsyncClient",
+        lambda **_: FakeClient(),
+    )
+
+    assert await resolve_hostname_via_doh("archive.is") is None
+
+
+@pytest.mark.asyncio
 async def test_archive_proxy_reaches_archive_rejects_rate_limited_proxy(monkeypatch) -> None:
     class FakeResponse:
         status_code = 429
@@ -527,6 +582,51 @@ def _settings(tmp_path: Path) -> Settings:
         archive_proxy_urls=(),
         archive_proxy_list_url=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_archive_host_resolver_rule_pins_doh_resolved_ip(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fetcher = BrowserPageFetcher(_settings(tmp_path))
+
+    async def fake_resolve(hostname: str) -> str | None:
+        assert hostname == "archive.is"
+        return "1.2.3.4"
+
+    monkeypatch.setattr(
+        "article_to_speech.browser.fetcher.resolve_hostname_via_doh",
+        fake_resolve,
+    )
+
+    rule = await fetcher._archive_host_resolver_rule(
+        "https://archive.is/https://example.com/story"
+    )
+
+    assert rule == "MAP archive.is 1.2.3.4"
+
+
+@pytest.mark.asyncio
+async def test_archive_host_resolver_rule_none_when_doh_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fetcher = BrowserPageFetcher(_settings(tmp_path))
+    monkeypatch.setattr(
+        "article_to_speech.browser.fetcher.resolve_hostname_via_doh",
+        lambda _hostname: _none_coro(),
+    )
+
+    rule = await fetcher._archive_host_resolver_rule(
+        "https://archive.is/https://example.com/story"
+    )
+
+    assert rule is None
+
+
+async def _none_coro() -> None:
+    return None
 
 
 class _FakePlaywrightContextManager:

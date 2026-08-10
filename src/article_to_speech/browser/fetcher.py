@@ -12,6 +12,7 @@ from article_to_speech.infra.archive_proxy import (
     ProxySettings,
     parse_proxy_settings,
     resolve_archive_proxy_urls,
+    resolve_hostname_via_doh,
     write_cached_archive_proxy_urls,
 )
 
@@ -103,9 +104,15 @@ class BrowserPageFetcher:
         archive_url: str,
         proxy: ProxySettings | None,
     ) -> RenderedPage:
+        args = browser_args()
+        if proxy is None:
+            # ponytail: ISP/local DNS can block archive.is while leaving its IP reachable;
+            # resolve over DoH and pin it so Chromium skips the poisoned system resolver.
+            if resolver_rule := await self._archive_host_resolver_rule(archive_url):
+                args = [*args, f"--host-resolver-rules={resolver_rule}"]
         launch_kwargs: dict[str, object] = {
             "headless": self._settings.browser_headless,
-            "args": browser_args(),
+            "args": args,
         }
         if proxy is not None:
             launch_kwargs["proxy"] = proxy
@@ -121,6 +128,15 @@ class BrowserPageFetcher:
                 await context.close()
         finally:
             await browser.close()
+
+    async def _archive_host_resolver_rule(self, archive_url: str) -> str | None:
+        hostname = urlparse(archive_url).hostname
+        if hostname is None:
+            return None
+        resolved_ip = await resolve_hostname_via_doh(hostname)
+        if resolved_ip is None:
+            return None
+        return f"MAP {hostname} {resolved_ip}"
 
     async def _new_context(self, browser: Browser) -> BrowserContext:
         return await browser.new_context(

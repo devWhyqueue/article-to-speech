@@ -11,7 +11,29 @@ import httpx
 ARCHIVE_BASE_URL = "https://archive.is/"
 ARCHIVE_PROXY_TEST_TIMEOUT_SECONDS = 10.0
 ARCHIVE_PROXY_DISCOVERY_BATCH_SIZE = 5
+DOH_RESOLVER_URL = "https://cloudflare-dns.com/dns-query"
+DOH_TIMEOUT_SECONDS = 5.0
 LOGGER = logging.getLogger(__name__)
+
+
+async def resolve_hostname_via_doh(hostname: str) -> str | None:
+    """Resolve a hostname's A record over DNS-over-HTTPS, bypassing local/ISP DNS blocks."""
+    try:
+        async with httpx.AsyncClient(timeout=DOH_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                DOH_RESOLVER_URL,
+                params={"name": hostname, "type": "A"},
+                headers={"Accept": "application/dns-json"},
+            )
+            response.raise_for_status()
+            answers = response.json().get("Answer") or []
+    except (httpx.HTTPError, ValueError) as error:
+        LOGGER.warning(
+            "doh_resolution_failed",
+            extra={"context": {"hostname": hostname, "error": str(error)}},
+        )
+        return None
+    return next((answer["data"] for answer in answers if answer.get("type") == 1), None)
 
 
 class ProxySettings(TypedDict):
