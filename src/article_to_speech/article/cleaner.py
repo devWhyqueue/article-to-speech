@@ -35,9 +35,11 @@ HEADING_SENTINEL = "\u0000heading\u0000"
 class NarrationFormatter:
     max_tts_input_bytes = 4_500
     # ponytail: Google TTS rejects any single sentence over some undocumented byte
-    # length ("sentences that are too long"); 900 is a conservative guess at a safe
-    # ceiling, tighten/loosen if real traffic still trips the error.
-    max_sentence_bytes = 900
+    # length ("sentences that are too long"). Confirmed in production: a 721-byte
+    # unpunctuated run (a chart's numeric data points glued together with no real
+    # words) got rejected, while normal ~200-340-byte prose sentences did not. 400
+    # keeps clear margin below the known-bad value; tighten further if it recurs.
+    max_sentence_bytes = 400
 
     def clean_article_text(self, article: ResolvedArticle) -> str:
         """Convert markdown article content into narration-friendly plain text."""
