@@ -1,3 +1,4 @@
+from article_to_speech.article.chunking import _split_into_sentences
 from article_to_speech.article.cleaner import NarrationFormatter
 from article_to_speech.core.models import ResolvedArticle
 
@@ -240,3 +241,25 @@ def test_cleaner_hard_splits_when_sentence_exceeds_budget() -> None:
 
     assert len(chunks) > 1
     assert all(len(chunk.text.encode("utf-8")) <= formatter.max_tts_input_bytes for chunk in chunks)
+
+
+def test_cleaner_hard_splits_unpunctuated_run_even_within_chunk_budget() -> None:
+    formatter = NarrationFormatter()
+    formatter.max_sentence_bytes = 50
+    article = ResolvedArticle(
+        canonical_url="https://example.com/article",
+        original_url="https://example.com/article",
+        final_url="https://example.com/article",
+        title="Garbled",
+        subtitle=None,
+        source=None,
+        author=None,
+        published_at=None,
+        body_text=("\U0001d110" * 80 + "\n\n" + "A normal sentence follows here."),
+    )
+
+    chunks = formatter.build_chunks(article)
+
+    for chunk in chunks:
+        for sentence in _split_into_sentences(chunk.text):
+            assert len(sentence.encode("utf-8")) <= formatter.max_sentence_bytes + 1

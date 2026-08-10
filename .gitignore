@@ -25,3 +25,4 @@ test-results/
 .playwright-cli/
 gcp-service-account.json
 .ruff_cache/
+.claude/settings.local.json

@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import re
 
-from article_to_speech.article_helpers import (
-    _hard_split_index_for_budget,
-    _split_index_for_budget,
-    _utf8_len,
-)
+from article_to_speech.article.chunking import build_chunk_texts
 from article_to_speech.core.models import NarrationChunk, ResolvedArticle
 
 WHITESPACE_PATTERN = re.compile(r"[ \t]+")
@@ -38,6 +34,10 @@ HEADING_SENTINEL = "\u0000heading\u0000"
 
 class NarrationFormatter:
     max_tts_input_bytes = 4_500
+    # ponytail: Google TTS rejects any single sentence over some undocumented byte
+    # length ("sentences that are too long"); 900 is a conservative guess at a safe
+    # ceiling, tighten/loosen if real traffic still trips the error.
+    max_sentence_bytes = 900
 
     def clean_article_text(self, article: ResolvedArticle) -> str:
         """Convert markdown article content into narration-friendly plain text."""
@@ -49,100 +49,16 @@ class NarrationFormatter:
 
     def build_chunks(self, article: ResolvedArticle) -> list[NarrationChunk]:
         """Build narration chunks sized for Google Cloud Text-to-Speech requests."""
-        cleaned = self.clean_article_text(article)
-        if self._fits_budget(cleaned):
-            return [NarrationChunk(text=cleaned)]
-        return self._build_chunked_chunks(article)
-
-    def _build_chunked_chunks(self, article: ResolvedArticle) -> list[NarrationChunk]:
         intro_parts = self._intro_parts(article)
         intro_text = "\n\n".join(intro_parts).strip()
         body = self._clean_body(article, intro_parts)
-        body_segments = self._split_body_segments(body, self.max_tts_input_bytes)
-        chunk_texts = self._assemble_chunk_texts(
-            intro_text, body_segments, self.max_tts_input_bytes
+        chunk_texts = build_chunk_texts(
+            intro_text,
+            body,
+            max_tts_input_bytes=self.max_tts_input_bytes,
+            max_sentence_bytes=self.max_sentence_bytes,
         )
         return [NarrationChunk(text=chunk_text) for chunk_text in chunk_texts]
-
-    def _assemble_chunk_texts(
-        self,
-        intro_text: str,
-        body_segments: list[str],
-        text_budget: int,
-    ) -> list[str]:
-        chunks: list[str] = []
-        current = intro_text
-        remaining_segments = list(body_segments)
-        if current and remaining_segments:
-            first_candidate = f"{current}\n\n{remaining_segments[0]}"
-            if not self._fits_budget(first_candidate, text_budget):
-                available = text_budget - _utf8_len(current) - _utf8_len("\n\n")
-                if available > 0:
-                    split_segments = self._split_text_to_fit(remaining_segments.pop(0), available)
-                    current = f"{current}\n\n{split_segments[0]}".strip()
-                    remaining_segments = split_segments[1:] + remaining_segments
-        for segment in remaining_segments:
-            candidate = f"{current}\n\n{segment}".strip() if current else segment
-            if candidate and self._fits_budget(candidate, text_budget):
-                current = candidate
-                continue
-            if current:
-                chunks.append(current)
-            current = segment
-        if current:
-            chunks.append(current)
-        return chunks
-
-    def _split_body_segments(self, body: str, text_budget: int) -> list[str]:
-        if not body:
-            return []
-        segments: list[str] = []
-        for paragraph in body.split("\n\n"):
-            if self._fits_budget(paragraph, text_budget):
-                segments.append(paragraph)
-                continue
-            segments.extend(self._split_text_to_fit(paragraph, text_budget))
-        return segments
-
-    def _split_text_to_fit(self, text: str, text_budget: int) -> list[str]:
-        if self._fits_budget(text, text_budget):
-            return [text]
-        sentences = _split_into_sentences(text)
-        if len(sentences) == 1:
-            return self._hard_split(text, text_budget)
-        chunks: list[str] = []
-        current = ""
-        for sentence in sentences:
-            sentence_parts = (
-                [sentence]
-                if self._fits_budget(sentence, text_budget)
-                else self._hard_split(sentence, text_budget)
-            )
-            for part in sentence_parts:
-                candidate = f"{current} {part}".strip() if current else part
-                if candidate and self._fits_budget(candidate, text_budget):
-                    current = candidate
-                    continue
-                if current:
-                    chunks.append(current)
-                current = part
-        if current:
-            chunks.append(current)
-        return chunks
-
-    def _hard_split(self, text: str, text_budget: int) -> list[str]:
-        remaining = text.strip()
-        chunks: list[str] = []
-        while remaining:
-            if self._fits_budget(remaining, text_budget):
-                chunks.append(remaining)
-                break
-            split_at = _split_index_for_budget(remaining, text_budget)
-            if split_at <= 0:
-                split_at = max(1, _hard_split_index_for_budget(remaining, text_budget))
-            chunks.append(remaining[:split_at].strip())
-            remaining = remaining[split_at:].strip()
-        return chunks
 
     def _clean_body(self, article: ResolvedArticle, intro_parts: list[str]) -> str:
         body = MULTI_NEWLINE_PATTERN.sub("\n\n", _clean_markdown_body(article.body_text)).strip()
@@ -153,10 +69,6 @@ class NarrationFormatter:
 
     def _intro_parts(self, article: ResolvedArticle) -> list[str]:
         return [article.title, article.subtitle] if article.subtitle else [article.title]
-
-    def _fits_budget(self, text: str, text_budget: int | None = None) -> bool:
-        budget = self.max_tts_input_bytes if text_budget is None else text_budget
-        return _utf8_len(text) <= budget
 
 
 def _clean_markdown_body(body_text: str) -> str:
@@ -233,8 +145,3 @@ def _looks_like_sentence(text: str) -> bool:
         return True
     words = text.split()
     return len(words) >= 10 and any(character.islower() for character in text)
-
-
-def _split_into_sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[.!?])\s+", text)
-    return [part.strip() for part in parts if part.strip()]
