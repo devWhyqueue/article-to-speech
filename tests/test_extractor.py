@@ -284,6 +284,45 @@ def test_extracts_zeit_archive_without_page_heading() -> None:
     assert "Diese Zusammenfassung wurde" not in article.body_text
 
 
+def test_extractor_drops_block_repeated_as_smaller_pieces() -> None:
+    subtitle = "Eine Reportage über Softwareentwickler und den Wandel ihres Berufs heute."
+    combined = (
+        "Wie viele Informatiker vor ihm wollte Grigorev Geld mit selbst geschriebenen "
+        "Zahlencodes verdienen, die Normalsterbliche nicht verstehen. Das kann nun die "
+        "künstliche Intelligenz übernehmen und Softwareentwickler ersetzen."
+    )
+    first_half = (
+        "Wie viele Informatiker vor ihm wollte Grigorev Geld mit selbst geschriebenen "
+        "Zahlencodes verdienen, die Normalsterbliche nicht verstehen."
+    )
+    second_half = "Das kann nun die künstliche Intelligenz übernehmen und Softwareentwickler ersetzen."
+    article = ArticleExtractor().extract(
+        url="https://www.spiegel.de/ausland/example.html",
+        final_url="https://archive.is/example",
+        html=f"""
+<!DOCTYPE html>
+<html lang="de">
+  <head><title>Beispieltitel - DER SPIEGEL</title></head>
+  <body>
+    <main>
+      <article>
+        <h1>Beispieltitel</h1>
+        <div>{subtitle}</div>
+        <div><span></span>{combined}</div>
+        <div>{first_half}</div>
+        <div>{second_half}</div>
+      </article>
+    </main>
+  </body>
+</html>
+""",
+    )
+
+    assert article is not None
+    assert article.body_text.count("Wie viele Informatiker vor ihm") == 1
+    assert combined in article.body_text
+
+
 def test_extracts_spiegel_archive_without_embedded_media_controls() -> None:
     article = ArticleExtractor().extract(
         url="https://www.spiegel.de/ausland/example.html",

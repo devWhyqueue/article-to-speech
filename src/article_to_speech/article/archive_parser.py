@@ -51,7 +51,11 @@ def parse_supported_archive_article(url: str, final_url: str, html: str) -> Reso
         return None
     article = _clone_article(article)
     _drop_nested_articles(article)
-    _drop_noise_nodes(article, config)
+    for selector in DROP_SELECTORS:
+        for node in article.select(selector):
+            node.decompose()
+    if config.source.slug == "spiegel":
+        _drop_spiegel_ad_sections(article)
     return _build_article(url, final_url, soup, article, config)
 
 
@@ -92,14 +96,6 @@ def _build_article(
         body_text=body_text,
         trace=(config.source.slug,),
     )
-
-
-def _drop_noise_nodes(article: Tag, config: SourceParserConfig) -> None:
-    for selector in DROP_SELECTORS:
-        for node in article.select(selector):
-            node.decompose()
-    if config.source.slug == "spiegel":
-        _drop_spiegel_ad_sections(article)
 
 
 def _extract_title(article: Tag, config: SourceParserConfig) -> str | None:
@@ -198,6 +194,7 @@ def _extract_markdown_body(
     skip_texts = {title, subtitle, author, published_at} - {None}
     parts: list[str] = []
     seen: set[str] = set()
+    seen_raw_blob = ""
     started = False
     spiegel_paused = False
     spektrum_skip_caption_followup = False
@@ -241,8 +238,12 @@ def _extract_markdown_body(
         if not started and (node.name in HEADING_TAGS or not _looks_like_body_paragraph(raw_text)):
             continue
         started = True
+        # Drop text already covered verbatim earlier (e.g. a SPIEGEL+ "gift
+        # article" preview repeating the body as smaller pieces).
+        if raw_text in seen or (len(raw_text) > 30 and raw_text in seen_raw_blob):
+            continue
         rendered = _render_markdown_block(node, raw_text)
-        if rendered not in seen:
-            seen.add(rendered)
-            parts.append(rendered)
+        seen.add(raw_text)
+        seen_raw_blob += raw_text + "\n"
+        parts.append(rendered)
     return "\n\n".join(parts).strip() or None
